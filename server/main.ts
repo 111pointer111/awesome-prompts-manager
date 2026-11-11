@@ -11,8 +11,8 @@ export async function main(): Promise<void> {
   const username = process.env.ADMIN_USERNAME ?? "admin";
   const password = process.env.ADMIN_PASSWORD;
   const key = Buffer.from(process.env.APP_SECRET ?? "", "base64");
-  if (!password || password.length < 16 || password.length > 1024 || key.length !== 32 || !username || username.length > 100) {
-    throw new Error("配置需要 ADMIN_PASSWORD（16～1024 字符）和 APP_SECRET（32 字节的 Base64），可先运行 node scripts/configure.mjs");
+  if (!password || password.length > 1024 || key.length !== 32 || !username || username.length > 100) {
+    throw new Error("配置需要 ADMIN_PASSWORD（1～1024 字符）和 APP_SECRET（32 字节的 Base64），可先运行 node scripts/configure.mjs");
   }
   const dataDirectory = resolve(process.env.DATA_DIR ?? "data");
   mkdirSync(dataDirectory, { recursive: true, mode: 0o700 });

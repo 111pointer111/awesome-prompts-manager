@@ -49,7 +49,7 @@ docker compose up -d
 | 配置 | 用途 |
 | --- | --- |
 | `APP_ORIGIN` | 浏览器的完整访问源，例如 `https://your-domain.example` |
-| `ADMIN_USERNAME`、`ADMIN_PASSWORD` | 管理员登录配置，修改后重启会更新账户并注销旧会话 |
+| `ADMIN_USERNAME`、`ADMIN_PASSWORD` | 管理员登录配置，密码支持1～1024字符，修改后重启会更新账户并注销旧会话 |
 | `APP_SECRET` | 32 字节 Base64 密钥，用于 AES-256-GCM 加密渠道 Token |
 | `DATA_DIR` | 直接运行时的数据目录，默认 `data` |
 | `HOST_PORT` | Compose 发布到宿主机的回环端口，默认 3300 |
