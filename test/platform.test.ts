@@ -17,7 +17,7 @@ const sourceToken = "synthetic-source-credential-for-testing";
 const key = Buffer.alloc(32, 7);
 const origin = "http://localhost:3300";
 
-async function fixture() {
+async function fixture(fetcher?: typeof fetch) {
   const example = createExample(":memory:", sourceToken);
   const source = example.app.listen(0, "127.0.0.1");
   await once(source, "listening");
@@ -25,7 +25,7 @@ async function fixture() {
   assert.ok(sourceAddress && typeof sourceAddress !== "string");
   const baseUrl = `http://127.0.0.1:${sourceAddress.port}`;
   const store = new Store(":memory:");
-  const platform = await createApp({ store, secret: key, origin, username: "admin", password: "synthetic-admin-password" });
+  const platform = await createApp({ store, secret: key, origin, username: "admin", password: "synthetic-admin-password", fetcher });
   const server = platform.app.listen(0, "127.0.0.1");
   await once(server, "listening");
   const address = server.address();
@@ -246,7 +246,11 @@ test("oversized malformed catalogs produce bounded validation failures", () => {
     const prompt = { ...f.store.get(), variables: Array(10001).fill(null), composition: Array(10001).fill(null) };
     const nested = catalogSchema.safeParse({ protocolVersion: 1, service: { id: "fixture", name: "Fixture" }, prompts: [prompt] });
     assert.equal(nested.success, false);
-    if (!nested.success) assert.equal(nested.error.issues.length, 2);
+    if (!nested.success) assert.equal(nested.error.issues.length, 1);
+    const worstCase = { ...f.store.get(), variables: Array(100).fill({}), composition: Array(100).fill(0) };
+    const atLimit = catalogSchema.safeParse({ protocolVersion: 1, service: { id: "fixture", name: "Fixture" }, prompts: Array(1000).fill(worstCase) });
+    assert.equal(atLimit.success, false);
+    if (!atLimit.success) assert.equal(atLimit.error.issues.length, 1);
   } finally { f.store.close(); }
 });
 
@@ -261,4 +265,29 @@ test("a remote version conflict immediately refreshes the comparison snapshot", 
     assert.equal(state.prompts[0]?.revision, "1");
     assert.equal(state.prompts[0]?.content, "业务其他入口已更新 {topics}");
   } finally { await f.close(); }
+});
+
+test("authenticated body requests cover the advertised UTF-16 template range", async () => {
+  const example = createExample(":memory:", sourceToken);
+  let current = { ...example.store.get(), maxLength: 131072, variables: [] };
+  const upstream: typeof fetch = async (url, init) => {
+    if (init?.method === "PUT") {
+      const update = JSON.parse(String(init.body));
+      current = { ...current, content: update.content, revision: "1", customized: true };
+    }
+    const body = String(url).endsWith("/v1/prompts")
+      ? { protocolVersion: 1, service: { id: "large-example", name: "Large example" }, prompts: [current] }
+      : current;
+    return new Response(JSON.stringify(body));
+  };
+  const f = await fixture(upstream);
+  try {
+    await f.login(); const id = await f.add();
+    const content = "中".repeat(100000);
+    const response = await f.request(`/api/channels/${id}/prompts/article-review`, "PUT", { content, expectedRevision: "0" });
+    assert.equal(response.status, 200);
+    const saved = await response.json();
+    assert.equal(saved.content.length, 100000);
+    assert.equal(saved.revision, "1");
+  } finally { example.store.close(); await f.close(); }
 });

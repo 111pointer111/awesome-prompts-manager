@@ -43,13 +43,13 @@ export async function createApp(options: AppOptions) {
     if (req.headers["sec-fetch-site"] === "cross-site") throw new AppError(403, "origin_denied", "请求来源不匹配");
     next();
   });
-  app.use("/api", express.json({ limit: "256kb", strict: true }));
   app.get("/api/session", (req, res) => { res.json({ authenticated: auth.authenticated(req) }); });
-  app.post("/api/login", (req, res) => auth.login(req, res));
+  app.post("/api/login", express.json({ limit: "16kb", strict: true }), (req, res) => auth.login(req, res));
   app.use("/api", (req, _res, next) => {
     if (!auth.authenticated(req)) throw new AppError(401, "login_required", "请先登录");
     next();
   });
+  app.use("/api", express.json({ limit: "1mb", strict: true }));
   app.post("/api/logout", (req, res) => { auth.logout(req, res); });
   app.get("/api/state", async (_req, res) => {
     function* snapshot() {
