@@ -314,7 +314,13 @@ export class ImperialScene {
       const selected = this.scrolls.find(
         (item) => item.id === selection.promptId,
       );
-      const start = selected?.target.clone() ?? new THREE.Vector3(0, 2.7, 0);
+      const start = selected?.object.group.visible
+        ? selected.object.group.position.clone()
+        : (selected?.target.clone() ?? new THREE.Vector3(0, 2.7, 0));
+      const rolledHeight =
+        (selected?.object.height ?? 1.35) *
+        (selected?.object.group.visible ? selected.object.group.scale.y : 1);
+      this.expanded.group.scale.setScalar(rolledHeight / this.expanded.height);
       this.camera.updateMatrixWorld();
       this.camera.worldToLocal(start);
       for (const item of this.scrolls) item.object.group.visible = false;
@@ -325,6 +331,7 @@ export class ImperialScene {
       setUnroll(this.expanded, 0);
       this.tween(this.expanded.group.position, { x: 0, y: -0.1, z: -8 }, 260);
       this.tween(this.expanded.group.rotation, { x: 0, y: 0, z: 0 }, 260);
+      this.tween(this.expanded.group.scale, { x: 1, y: 1, z: 1 }, 260);
       this.tween(
         this.unroll,
         { value: 1 },

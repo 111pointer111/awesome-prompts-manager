@@ -142,3 +142,23 @@ test("飞卷途中直接展卷，收卷后恢复卷轴的正常尺寸", () => {
   disposeObject(object.group);
   disposeObject(f.expanded.group);
 });
+
+test("从飞卷当前位置与尺寸连续进入展卷", () => {
+  const f = sceneWithDeferredAnimation();
+  const object = makeScroll(new THREE.Texture(), 0.8, 1.35);
+  object.group.position.set(1, 2, 3);
+  object.group.scale.setScalar(0.4);
+  f.scrolls.push({
+    id: "a/one",
+    object,
+    target: new THREE.Vector3(3, 0.65, 4),
+  });
+  f.scene.transition({ channelId: "a", promptId: "a/one" });
+  assert.deepEqual(f.expanded.group.position.toArray(), [1, 2, 3]);
+  assert.ok(
+    Math.abs(f.expanded.group.scale.y * f.expanded.height - 1.35 * 0.4) <
+      0.000001,
+  );
+  disposeObject(object.group);
+  disposeObject(f.expanded.group);
+});
