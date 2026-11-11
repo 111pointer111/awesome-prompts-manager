@@ -58,13 +58,14 @@ function saveHandler(kind: "content" | "note", submitted: Draft, onDraft: (updat
   onContentSaved: (submitted: Pick<Draft, "content" | "revision">, saved: Prompt) => void;
   onNoteSaved: (submitted: Pick<Draft, "note" | "noteRevision">) => void;
   onRefresh?: () => Promise<void>;
+  onConfirmed?: (revision: string) => void;
 }) {
   const begin = kind === "content" ? "  async function saveContent" : "  async function saveNote";
   const end = kind === "content" ? "  async function saveNote" : "  function loadLatestContent";
   const text = editor.slice(editor.indexOf(begin), editor.indexOf(end)).replace("api<Prompt>", "api");
-  return new Function("api", "saving", "editable", "setSaving", "onDraft", "draft", "contentPath", "onRefresh", "onError", "messageOf", "onContentSaved", "onNoteSaved", text + `; return ${kind === "content" ? "saveContent" : "saveNote"};`)(
+  return new Function("api", "saving", "editable", "setSaving", "onDraft", "draft", "contentPath", "onRefresh", "onError", "messageOf", "onContentSaved", "onNoteSaved", "setConfirmedRevision", text + `; return ${kind === "content" ? "saveContent" : "saveNote"};`)(
     () => response, null, true, () => undefined, onDraft, submitted, "/prompt", callbacks.onRefresh ?? (async () => undefined),
-    () => undefined, String, callbacks.onContentSaved, callbacks.onNoteSaved,
+    () => undefined, String, callbacks.onContentSaved, callbacks.onNoteSaved, callbacks.onConfirmed ?? (() => undefined),
   ) as () => Promise<void>;
 }
 
@@ -306,4 +307,31 @@ test("已接收目录的 FIFO 更新仍在会话改变时失效", async () => {
   for (const update of queued) update();
   assert.deepEqual(state.context.platform.prompts, []);
   assert.deepEqual(state.context.drafts, {});
+});
+
+test("正文回读成功后才发出盖印回执，备注保存不触发盖印", async () => {
+  const submitted = { ...newDraft(prompt), content: "confirmed body" };
+  const state = draftState(submitted);
+  const confirmed: string[] = [];
+  const response = deferred<Prompt>();
+  const pending = saveHandler("content", submitted, state.onDraft, response.promise, { ...state, onConfirmed: revision => confirmed.push(revision) })();
+  assert.equal(confirmed.length, 0);
+  response.resolve({ ...prompt, content: submitted.content, revision: "confirmed-v1" });
+  await pending;
+  assert.deepEqual(confirmed, ["confirmed-v1"]);
+  await saveHandler("note", submitted, state.onDraft, Promise.resolve({ saved: true }), { ...state, onConfirmed: revision => confirmed.push(revision) })();
+  assert.deepEqual(confirmed, ["confirmed-v1"]);
+});
+
+test("正文保存待确认时保留输入，盖印回执保持为空", async () => {
+  const submitted = { ...newDraft(prompt), content: "pending body" };
+  const state = draftState(submitted);
+  const confirmed: string[] = [];
+  const response = deferred<Prompt>();
+  const pending = saveHandler("content", submitted, state.onDraft, response.promise, { ...state, onConfirmed: revision => confirmed.push(revision) })();
+  response.reject(new Error("回读尚未确认"));
+  await pending;
+  assert.equal(confirmed.length, 0);
+  assert.equal(state.context.drafts[key]?.content, submitted.content);
+  assert.equal(state.context.drafts[key]?.contentError, "Error: 回读尚未确认");
 });

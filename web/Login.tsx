@@ -22,7 +22,7 @@ export function Login({ onLogin, message }: { onLogin: () => void; message: stri
   }
 
   return <main className="login-page">
-    <div className="login-brand"><span className="brand-mark" aria-hidden="true">p.</span><span>Prompts</span></div>
+    <div className="login-brand"><span className="brand-seal" aria-hidden="true">御</span><span>水墨御案</span></div>
     <form className="login-form" onSubmit={submit}>
       <h1>登录提示词管理</h1>
       <p className="muted">使用管理员账户访问你的业务渠道。</p>

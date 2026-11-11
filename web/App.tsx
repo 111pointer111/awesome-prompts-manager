@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { Channel, PlatformState, Prompt } from "../shared/protocol";
 import { api, ApiError, messageOf } from "./api";
 import { ChannelDialog } from "./ChannelDialog";
-import { contentDirty, matchesPrompt, mergeContentSave, mergeNoteSave, newDraft, noteDirty, promptKey, reconcileDraft } from "./drafts";
+import { contentDirty, mergeContentSave, mergeNoteSave, newDraft, noteDirty, promptKey, reconcileDraft } from "./drafts";
 import type { Draft, DraftUpdate } from "./drafts";
-import { Editor, formatTime } from "./Editor";
+import { Editor } from "./Editor";
+import { ImperialDesk } from "./ImperialDesk";
 import { Login } from "./Login";
 
 const emptyState: PlatformState = { channels: [], prompts: [] };
@@ -17,8 +18,6 @@ export function App() {
   const [platform, setPlatform] = useState<PlatformState>(emptyState);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
-  const [channelFilter, setChannelFilter] = useState("");
-  const [query, setQuery] = useState("");
   const [message, setMessage] = useState("");
   const [dialog, setDialog] = useState<{ channel?: Channel } | null>(null);
   const [syncRequested, setSyncRequested] = useState(false);
@@ -119,14 +118,9 @@ export function App() {
     return () => window.removeEventListener("beforeunload", warn);
   }, [hasDrafts]);
 
-  const channelNames = useMemo(() => new Map(platform.channels.map(channel => [channel.id, channel.name])), [platform.channels]);
-  const visible = useMemo(() => platform.prompts.filter(prompt =>
-    (!channelFilter || prompt.channelId === channelFilter) && matchesPrompt(prompt, channelNames.get(prompt.channelId) ?? "", query)
-  ), [platform.prompts, channelFilter, channelNames, query]);
-  const selected = platform.prompts.find(prompt => promptKey(prompt) === selectedKey) ?? (selectedKey === null ? visible[0] : undefined);
+  const selected = platform.prompts.find(prompt => promptKey(prompt) === selectedKey);
   const selectedChannel = selected ? platform.channels.find(channel => channel.id === selected.channelId) : undefined;
   const draft = selected ? drafts[promptKey(selected)] ?? newDraft(selected) : undefined;
-  const filteredChannel = platform.channels.find(channel => channel.id === channelFilter);
   const draftEpoch = epoch.current;
 
   function updateDraft(update: DraftUpdate) {
@@ -197,8 +191,6 @@ export function App() {
       setPlatform(emptyState);
       setDrafts({});
       setSelectedKey(null);
-      setChannelFilter("");
-      setQuery("");
       setDialog(null);
       setMessage("");
       setSyncRequested(false);
@@ -209,51 +201,13 @@ export function App() {
   if (authenticated === null) return <main className="loading-page" role="status">正在加载…</main>;
   if (!authenticated) return <Login onLogin={loggedIn} message={message} />;
 
-  return <div className="app-shell">
-    <aside className="sidebar" aria-label="渠道导航">
-      <a className="brand" href="#" onClick={event => { event.preventDefault(); setChannelFilter(""); }}><span className="brand-mark" aria-hidden="true">p.</span><span>Prompts</span></a>
-      <nav className="channel-navigation">
-        <button className={`all-prompts ${!channelFilter ? "selected" : ""}`} type="button" onClick={() => setChannelFilter("")} aria-current={!channelFilter ? "page" : undefined}><span>全部提示词</span><span className="count">{platform.prompts.length}</span></button>
-        <div className="nav-heading"><h2>渠道</h2><button className="icon-button" type="button" aria-label="添加渠道" title="添加渠道" onClick={() => setDialog({})}>＋</button></div>
-        {platform.channels.length === 0 && <p className="nav-empty">添加业务地址，读取提示词目录。</p>}
-        {platform.channels.map(channel => <div className={`channel-row ${channelFilter === channel.id ? "selected" : ""}`} key={channel.id}>
-          <button className="channel-filter" type="button" onClick={() => setChannelFilter(channel.id)} aria-current={channelFilter === channel.id ? "page" : undefined}>
-            <span className={`status-dot ${channel.error ? "offline" : channel.syncing ? "syncing" : "online"}`} aria-hidden="true" />
-            <span className="channel-label"><span>{channel.name}</span><small>{channel.syncing ? "同步中" : channel.error ? "离线" : "已连接"}</small></span>
-          </button>
-          <button className="channel-config" type="button" aria-label={`配置${channel.name}`} onClick={() => setDialog({ channel })}>配置</button>
-        </div>)}
-      </nav>
-      <footer className="sidebar-footer"><p>页面使用期间每 60 秒同步</p><button type="button" className="text-button" onClick={() => void logout()} disabled={loggingOut}>{loggingOut ? "正在退出…" : "退出登录"}</button></footer>
-    </aside>
-
-    <main className="workspace">
-      <header className="workspace-header"><div><p className="eyebrow">提示词管理</p><h1>{filteredChannel?.name ?? "全部提示词"}</h1></div><button className="sync-button" type="button" onClick={() => void synchronize()} disabled={syncRequested || synchronizing}>{syncRequested || synchronizing ? "正在同步…" : "同步目录"}</button></header>
-      {message && <div className="global-message" role="status"><span>{message}</span><button className="icon-button" type="button" aria-label="关闭提示" onClick={() => setMessage("")}>×</button></div>}
-      <div className="working-area">
-        <section className="prompt-browser" aria-label="提示词列表">
-          <div className="search-area"><label className="visually-hidden" htmlFor="prompt-search">搜索提示词</label><input id="prompt-search" type="search" placeholder="搜索名称、正文或备注" value={query} onChange={event => setQuery(event.target.value)} /><div className="result-caption"><span>{visible.length} 条提示词</span>{query && <button className="text-button" type="button" onClick={() => setQuery("")}>清除搜索</button>}</div></div>
-          {filteredChannel?.error && <p className="source-warning">{filteredChannel.error}<span>最近同步 {formatTime(filteredChannel.lastSyncedAt)}</span></p>}
-          <div className="prompt-list">
-            {visible.map(prompt => {
-              const key = promptKey(prompt);
-              const localDraft = drafts[key];
-              const dirty = localDraft && (contentDirty(localDraft) || noteDirty(localDraft));
-              const source = platform.channels.find(channel => channel.id === prompt.channelId);
-              return <button className={`prompt-row ${selected && promptKey(selected) === key ? "selected" : ""}`} key={key} type="button" onClick={() => setSelectedKey(key)} aria-pressed={!!selected && promptKey(selected) === key}>
-                <span className="prompt-source">{source?.name}{!prompt.active && " · 已移除"}{source?.error && " · 离线"}</span>
-                <span className="prompt-name">{prompt.name}{dirty && <span className="draft-dot" title="有未保存内容" aria-label="有未保存内容" />}</span>
-                <span className="prompt-description">{prompt.description || prompt.content}</span>
-                {prompt.note && <span className="prompt-note-preview">备注 · {prompt.note}</span>}
-                <span className="prompt-row-footer"><span>{prompt.customized ? "已自定义" : "默认内容"}</span><span>v{prompt.revision}</span></span>
-              </button>;
-            })}
-            {visible.length === 0 && <div className="empty-state"><h2>{platform.channels.length === 0 ? "接入第一个业务" : "没有匹配的提示词"}</h2><p>{platform.channels.length === 0 ? "配置业务地址和 Token，自动读取可管理的提示词。" : query ? "试试其他关键词，或清除搜索条件。" : "同步目录，或选择其他渠道查看。"}</p>{platform.channels.length === 0 && <button className="primary" type="button" onClick={() => setDialog({})}>添加渠道</button>}</div>}
-          </div>
-        </section>
-        {selected && selectedChannel && draft ? <Editor key={promptKey(selected)} prompt={selected} channel={selectedChannel} draft={draft} onDraft={updateDraft} onContentSaved={contentSaved} onNoteSaved={noteSaved} onRefresh={refreshCurrent} onError={handleCurrentError} /> : <section className="editor empty-editor"><div><h2>选择一条提示词</h2><p>查看正文、运行时变量和备注。</p></div></section>}
-      </div>
-    </main>
+  return <>
+    <ImperialDesk platform={platform} drafts={drafts} selectedKey={selectedKey} onSelect={setSelectedKey}
+      onConfigure={channel => setDialog(channel ? { channel } : {})} onSync={() => void synchronize()}
+      syncing={syncRequested || synchronizing} onLogout={() => void logout()} loggingOut={loggingOut}
+      message={message} onDismissMessage={() => setMessage("")}>
+      {selected && selectedChannel && draft && <Editor key={promptKey(selected)} prompt={selected} channel={selectedChannel} draft={draft} onDraft={updateDraft} onContentSaved={contentSaved} onNoteSaved={noteSaved} onRefresh={refreshCurrent} onError={handleCurrentError} />}
+    </ImperialDesk>
     {dialog && <ChannelDialog key={dialog.channel?.id ?? "new"} channel={dialog.channel} onClose={() => setDialog(null)} onSaved={refreshCurrent} onError={handleCurrentError} />}
-  </div>;
+  </>;
 }

@@ -2,6 +2,7 @@ import { Component, StrictMode } from "react";
 import type { ErrorInfo, ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
+import "lxgw-wenkai-webfont/lxgwwenkai-bold.css";
 import "./styles.css";
 
 class ErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {

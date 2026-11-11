@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { animate } from "animejs";
 import type { Channel, ManagedPrompt, Prompt } from "../shared/protocol";
 import { api, messageOf } from "./api";
 import { contentDirty, newDraft, noteDirty } from "./drafts";
@@ -21,6 +22,14 @@ export function formatTime(value: string | null): string {
 
 export function Editor({ prompt, channel, draft, onDraft, onContentSaved, onNoteSaved, onRefresh, onError }: Props) {
   const [saving, setSaving] = useState<"content" | "note" | null>(null);
+  const [confirmedRevision, setConfirmedRevision] = useState<string | null>(null);
+  const seal = useRef<HTMLDivElement>(null);
+  const confirmed = confirmedRevision === prompt.revision && !contentDirty(draft) && !draft.contentError;
+  useEffect(() => {
+    if (!confirmed || !seal.current) return;
+    const animation = animate(seal.current, { opacity: [0, 1], scale: [1.4, 1], rotate: [-14, -8], duration: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 1 : 280, ease: "outCubic" });
+    return () => { animation.cancel(); };
+  }, [confirmed, confirmedRevision]);
   const changedRemotely = prompt.revision !== draft.revision;
   const noteChangedRemotely = prompt.noteRevision !== draft.noteRevision;
   const editable = !channel.error && prompt.active && !prompt.readOnly;
@@ -35,6 +44,7 @@ export function Editor({ prompt, channel, draft, onDraft, onContentSaved, onNote
     try {
       const saved = await api<Prompt>(contentPath, "PUT", { content: reset ? null : submitted.content, expectedRevision: submitted.revision });
       onContentSaved(submitted, saved);
+      setConfirmedRevision(saved.revision);
       await onRefresh();
     } catch (error) {
       onDraft({ contentError: messageOf(error) });
@@ -71,6 +81,7 @@ export function Editor({ prompt, channel, draft, onDraft, onContentSaved, onNote
   }
 
   return <section className="editor" aria-labelledby="editor-title">
+    {confirmed && <div ref={seal} className="confirmation-seal" role="status" aria-label="正文已保存并回读确认"><span>已核</span><small>回读确认</small></div>}
     <header className="editor-heading">
       <div className="eyebrow">{channel.name}<span aria-hidden="true"> / </span>{prompt.customized ? "自定义内容" : "默认内容"}</div>
       <h2 id="editor-title">{prompt.name}</h2>
