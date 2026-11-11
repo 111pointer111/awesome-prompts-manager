@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { Channel, ManagedPrompt, Prompt } from "../shared/protocol";
 import { api, messageOf } from "./api";
-import { contentDirty, mergeContentSave, mergeNoteSave, newDraft, noteDirty } from "./drafts";
+import { contentDirty, newDraft, noteDirty } from "./drafts";
 import type { Draft, DraftUpdate } from "./drafts";
 
 interface Props {
@@ -9,6 +9,8 @@ interface Props {
   channel: Channel;
   draft: Draft;
   onDraft: (update: DraftUpdate) => void;
+  onContentSaved: (submitted: Pick<Draft, "content" | "revision">, saved: Prompt) => void;
+  onNoteSaved: (submitted: Pick<Draft, "note" | "noteRevision">) => void;
   onRefresh: () => Promise<void>;
   onError: (error: unknown) => void;
 }
@@ -17,7 +19,7 @@ export function formatTime(value: string | null): string {
   return value ? new Date(value).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : "尚未同步";
 }
 
-export function Editor({ prompt, channel, draft, onDraft, onRefresh, onError }: Props) {
+export function Editor({ prompt, channel, draft, onDraft, onContentSaved, onNoteSaved, onRefresh, onError }: Props) {
   const [saving, setSaving] = useState<"content" | "note" | null>(null);
   const changedRemotely = prompt.revision !== draft.revision;
   const noteChangedRemotely = prompt.noteRevision !== draft.noteRevision;
@@ -32,7 +34,7 @@ export function Editor({ prompt, channel, draft, onDraft, onRefresh, onError }: 
     const submitted = { content: draft.content, revision: draft.revision };
     try {
       const saved = await api<Prompt>(contentPath, "PUT", { content: reset ? null : submitted.content, expectedRevision: submitted.revision });
-      onDraft(current => mergeContentSave(current, submitted, saved));
+      onContentSaved(submitted, saved);
       await onRefresh();
     } catch (error) {
       onDraft({ contentError: messageOf(error) });
@@ -48,7 +50,7 @@ export function Editor({ prompt, channel, draft, onDraft, onRefresh, onError }: 
     const submitted = { note: draft.note, noteRevision: draft.noteRevision };
     try {
       await api(contentPath + "/note", "PUT", { note: submitted.note, expectedRevision: submitted.noteRevision });
-      onDraft(current => mergeNoteSave(current, submitted));
+      onNoteSaved(submitted);
       await onRefresh();
     } catch (error) {
       onDraft({ noteError: messageOf(error) });

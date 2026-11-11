@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Channel, PlatformState } from "../shared/protocol";
+import type { Channel, PlatformState, Prompt } from "../shared/protocol";
 import { api, ApiError, messageOf } from "./api";
 import { ChannelDialog } from "./ChannelDialog";
-import { contentDirty, matchesPrompt, newDraft, noteDirty, promptKey, reconcileDraft } from "./drafts";
+import { contentDirty, matchesPrompt, mergeContentSave, mergeNoteSave, newDraft, noteDirty, promptKey, reconcileDraft } from "./drafts";
 import type { Draft, DraftUpdate } from "./drafts";
 import { Editor, formatTime } from "./Editor";
 import { Login } from "./Login";
@@ -41,11 +41,13 @@ export function App() {
   const refresh = useCallback(async () => {
     const startedAt = epoch.current;
     const requestId = ++refreshSequence.current;
+    const isCurrent = () => authenticatedRef.current && startedAt === epoch.current && requestId === refreshSequence.current;
     try {
       const next = await api<PlatformState>("/api/state");
-      if (!authenticatedRef.current || startedAt !== epoch.current || requestId !== refreshSequence.current) return;
-      setPlatform(next);
+      if (!isCurrent()) return;
+      setPlatform(previous => isCurrent() ? next : previous);
       setDrafts(previous => {
+        if (!isCurrent()) return previous;
         const reconciled = { ...previous };
         for (const prompt of next.prompts) {
           const key = promptKey(prompt);
@@ -55,7 +57,7 @@ export function App() {
         return reconciled;
       });
     } catch (error) {
-      if (startedAt === epoch.current && authenticatedRef.current && requestId === refreshSequence.current) handleError(error);
+      if (isCurrent()) handleError(error);
     }
   }, [handleError]);
 
@@ -133,6 +135,35 @@ export function App() {
       const current = previous[key] ?? newDraft(selected);
       return { ...previous, [key]: typeof update === "function" ? update(current) : { ...current, ...update } };
     });
+  }
+
+  function contentSaved(submitted: Pick<Draft, "content" | "revision">, saved: Prompt) {
+    if (!selected || !authenticatedRef.current || draftEpoch !== epoch.current) return;
+    const key = promptKey(selected);
+    refreshSequence.current += 1;
+    setPlatform(previous => {
+      if (!authenticatedRef.current || draftEpoch !== epoch.current) return previous;
+      return { ...previous, prompts: previous.prompts.map(prompt => {
+        if (promptKey(prompt) !== key || (prompt.revision !== submitted.revision && prompt.revision !== saved.revision)) return prompt;
+        return { ...prompt, ...saved };
+      }) };
+    });
+    updateDraft(current => mergeContentSave(current, submitted, saved));
+  }
+
+  function noteSaved(submitted: Pick<Draft, "note" | "noteRevision">) {
+    if (!selected || !authenticatedRef.current || draftEpoch !== epoch.current) return;
+    const key = promptKey(selected);
+    const noteRevision = submitted.noteRevision + 1;
+    refreshSequence.current += 1;
+    setPlatform(previous => {
+      if (!authenticatedRef.current || draftEpoch !== epoch.current) return previous;
+      return { ...previous, prompts: previous.prompts.map(prompt => {
+        if (promptKey(prompt) !== key || (prompt.noteRevision !== submitted.noteRevision && prompt.noteRevision !== noteRevision)) return prompt;
+        return { ...prompt, note: submitted.note, noteRevision };
+      }) };
+    });
+    updateDraft(current => mergeNoteSave(current, submitted));
   }
 
   function handleCurrentError(error: unknown) {
@@ -218,7 +249,7 @@ export function App() {
             {visible.length === 0 && <div className="empty-state"><h2>{platform.channels.length === 0 ? "接入第一个业务" : "没有匹配的提示词"}</h2><p>{platform.channels.length === 0 ? "配置业务地址和 Token，自动读取可管理的提示词。" : query ? "试试其他关键词，或清除搜索条件。" : "同步目录，或选择其他渠道查看。"}</p>{platform.channels.length === 0 && <button className="primary" type="button" onClick={() => setDialog({})}>添加渠道</button>}</div>}
           </div>
         </section>
-        {selected && selectedChannel && draft ? <Editor key={promptKey(selected)} prompt={selected} channel={selectedChannel} draft={draft} onDraft={updateDraft} onRefresh={refreshCurrent} onError={handleCurrentError} /> : <section className="editor empty-editor"><div><h2>选择一条提示词</h2><p>查看正文、运行时变量和备注。</p></div></section>}
+        {selected && selectedChannel && draft ? <Editor key={promptKey(selected)} prompt={selected} channel={selectedChannel} draft={draft} onDraft={updateDraft} onContentSaved={contentSaved} onNoteSaved={noteSaved} onRefresh={refreshCurrent} onError={handleCurrentError} /> : <section className="editor empty-editor"><div><h2>选择一条提示词</h2><p>查看正文、运行时变量和备注。</p></div></section>}
       </div>
     </main>
     {dialog && <ChannelDialog key={dialog.channel?.id ?? "new"} channel={dialog.channel} onClose={() => setDialog(null)} onSaved={refreshCurrent} onError={handleCurrentError} />}

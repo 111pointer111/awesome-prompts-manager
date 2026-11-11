@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import ts from "typescript";
 import type { ManagedPrompt, PlatformState, Prompt } from "../shared/protocol";
 import { contentDirty, mergeContentSave, mergeNoteSave, newDraft, noteDirty, promptKey, reconcileDraft } from "./drafts";
 import type { Draft, DraftUpdate } from "./drafts";
@@ -22,7 +23,11 @@ function deferred<T>() {
 }
 
 function draftState(initial: Draft) {
-  const context = { drafts: { [key]: initial } as Record<string, Draft>, epoch: { current: 1 }, authenticated: { current: true } };
+  const context = {
+    platform: { channels: [], prompts: [prompt] } as PlatformState,
+    drafts: { [key]: initial } as Record<string, Draft>, epoch: { current: 1 }, authenticated: { current: true },
+    sequence: { current: 0 }, responses: [] as ReturnType<typeof deferred<PlatformState>>[], errors: [] as unknown[],
+  };
   const begin = app.indexOf("  function updateDraft(");
   const text = app.slice(begin, app.indexOf("\n\n  function ", begin + 10))
     .replace(/update: (?:Partial<Draft>|DraftUpdate)/, "update");
@@ -30,24 +35,43 @@ function draftState(initial: Draft) {
     prompt, context.authenticated, context.epoch, 1, promptKey, newDraft,
     (update: (previous: Record<string, Draft>) => Record<string, Draft>) => { context.drafts = update(context.drafts); },
   ) as (update: DraftUpdate) => void;
-  return { context, onDraft };
+  function handler(name: "contentSaved" | "noteSaved") {
+    const begin = app.indexOf(`  function ${name}(`);
+    const text = app.slice(begin, app.indexOf("\n\n  function ", begin + 10));
+    const javascript = ts.transpile(text, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None });
+    return new Function("selected", "authenticatedRef", "epoch", "draftEpoch", "promptKey", "refreshSequence", "setPlatform", "updateDraft", "mergeContentSave", "mergeNoteSave", javascript + `; return ${name};`)(
+      prompt, context.authenticated, context.epoch, 1, promptKey, context.sequence,
+      (update: (previous: PlatformState) => PlatformState) => { context.platform = update(context.platform); },
+      onDraft, mergeContentSave, mergeNoteSave,
+    );
+  }
+  return {
+    context, onDraft,
+    onContentSaved: handler("contentSaved") as (submitted: Pick<Draft, "content" | "revision">, saved: Prompt) => void,
+    onNoteSaved: handler("noteSaved") as (submitted: Pick<Draft, "note" | "noteRevision">) => void,
+  };
 }
 
-function saveHandler(kind: "content" | "note", submitted: Draft, onDraft: (update: DraftUpdate) => void, response: Promise<unknown>) {
+function saveHandler(kind: "content" | "note", submitted: Draft, onDraft: (update: DraftUpdate) => void, response: Promise<unknown>, callbacks: {
+  onContentSaved: (submitted: Pick<Draft, "content" | "revision">, saved: Prompt) => void;
+  onNoteSaved: (submitted: Pick<Draft, "note" | "noteRevision">) => void;
+  onRefresh?: () => Promise<void>;
+}) {
   const begin = kind === "content" ? "  async function saveContent" : "  async function saveNote";
   const end = kind === "content" ? "  async function saveNote" : "  function loadLatestContent";
   const text = editor.slice(editor.indexOf(begin), editor.indexOf(end)).replace("api<Prompt>", "api");
-  return new Function("api", "saving", "editable", "setSaving", "onDraft", "draft", "contentPath", "onRefresh", "onError", "messageOf", "mergeContentSave", "mergeNoteSave", text + `; return ${kind === "content" ? "saveContent" : "saveNote"};`)(
-    () => response, null, true, () => undefined, onDraft, submitted, "/prompt", async () => undefined,
-    () => undefined, String, mergeContentSave, mergeNoteSave,
+  return new Function("api", "saving", "editable", "setSaving", "onDraft", "draft", "contentPath", "onRefresh", "onError", "messageOf", "onContentSaved", "onNoteSaved", text + `; return ${kind === "content" ? "saveContent" : "saveNote"};`)(
+    () => response, null, true, () => undefined, onDraft, submitted, "/prompt", callbacks.onRefresh ?? (async () => undefined),
+    () => undefined, String, callbacks.onContentSaved, callbacks.onNoteSaved,
   ) as () => Promise<void>;
 }
 
 test("旧正文保存返回时，保留切换条目后继续输入的正文", async () => {
   const submitted = { ...newDraft(prompt), content: "first edit" };
-  const { context, onDraft } = draftState(submitted);
+  const state = draftState(submitted);
+  const { context, onDraft } = state;
   const response = deferred<Prompt>();
-  const save = saveHandler("content", { ...submitted }, onDraft, response.promise);
+  const save = saveHandler("content", { ...submitted }, onDraft, response.promise, state);
   const pending = save();
   onDraft({ content: "later edit after switching away and back" });
   response.resolve({ ...prompt, content: "first edit", revision: "1" });
@@ -60,9 +84,10 @@ test("旧正文保存返回时，保留切换条目后继续输入的正文", as
 
 test("旧备注保存返回时，保留后续备注输入并更新已保存基线", async () => {
   const submitted = { ...newDraft(prompt), note: "submitted note" };
-  const { context, onDraft } = draftState(submitted);
+  const state = draftState(submitted);
+  const { context, onDraft } = state;
   const response = deferred<{ saved: boolean }>();
-  const pending = saveHandler("note", { ...submitted }, onDraft, response.promise)();
+  const pending = saveHandler("note", { ...submitted }, onDraft, response.promise, state)();
   onDraft({ note: "later note after switching" });
   response.resolve({ saved: true });
   await pending;
@@ -74,11 +99,12 @@ test("旧备注保存返回时，保留后续备注输入并更新已保存基�
 
 test("保存响应到达前已有更高版本时，保留更新的正文和备注基线", async () => {
   const submitted = { ...newDraft(prompt), content: "first edit", note: "first note" };
-  const { context, onDraft } = draftState(submitted);
+  const state = draftState(submitted);
+  const { context, onDraft } = state;
   const contentResponse = deferred<Prompt>();
   const noteResponse = deferred<{ saved: boolean }>();
-  const pendingContent = saveHandler("content", { ...submitted }, onDraft, contentResponse.promise)();
-  const pendingNote = saveHandler("note", { ...submitted }, onDraft, noteResponse.promise)();
+  const pendingContent = saveHandler("content", { ...submitted }, onDraft, contentResponse.promise, state)();
+  const pendingNote = saveHandler("note", { ...submitted }, onDraft, noteResponse.promise, state)();
   onDraft({ content: "newer content", baseContent: "newer content", revision: "2", note: "newer note", baseNote: "newer note", noteRevision: 2 });
   contentResponse.resolve({ ...prompt, content: "first edit", revision: "1" });
   noteResponse.resolve({ saved: true });
@@ -92,9 +118,10 @@ test("保存响应到达前已有更高版本时，保留更新的正文和备�
 
 test("登出并重新登录后，旧 Editor 保存回调不会恢复已清除的草稿", async () => {
   const submitted = { ...newDraft(prompt), content: "private draft" };
-  const { context, onDraft } = draftState(submitted);
+  const state = draftState(submitted);
+  const { context, onDraft } = state;
   const response = deferred<Prompt>();
-  const pending = saveHandler("content", { ...submitted }, onDraft, response.promise)();
+  const pending = saveHandler("content", { ...submitted }, onDraft, response.promise, state)();
   context.epoch.current = 2;
   context.authenticated.current = false;
   context.drafts = {};
@@ -105,19 +132,15 @@ test("登出并重新登录后，旧 Editor 保存回调不会恢复已清除的
   assert.deepEqual(context.drafts, {});
 });
 
-function refreshState() {
-  const context = {
-    platform: { channels: [], prompts: [prompt] } as PlatformState,
-    drafts: { [key]: newDraft(prompt) }, epoch: { current: 1 }, authenticated: { current: true },
-    sequence: { current: 0 }, responses: [] as ReturnType<typeof deferred<PlatformState>>[], errors: [] as unknown[],
-  };
+function refreshState(context = draftState(newDraft(prompt)).context, queued?: (() => void)[]) {
+  const apply = (operation: () => void) => { if (queued) queued.push(operation); else operation(); };
   const text = app.slice(app.indexOf("  const refresh = useCallback"), app.indexOf("\n\n  const synchronize"))
     .replace("api<PlatformState>", "api");
   const refresh = new Function("useCallback", "epoch", "refreshSequence", "api", "authenticatedRef", "setPlatform", "setDrafts", "promptKey", "reconcileDraft", "handleError", text + "; return refresh;")(
     (fn: unknown) => fn, context.epoch, context.sequence,
     () => { const response = deferred<PlatformState>(); context.responses.push(response); return response.promise; },
-    context.authenticated, (next: PlatformState) => { context.platform = next; },
-    (update: (previous: Record<string, Draft>) => Record<string, Draft>) => { context.drafts = update(context.drafts); },
+    context.authenticated, (update: PlatformState | ((previous: PlatformState) => PlatformState)) => { apply(() => { context.platform = typeof update === "function" ? update(context.platform) : update; }); },
+    (update: (previous: Record<string, Draft>) => Record<string, Draft>) => { apply(() => { context.drafts = update(context.drafts); }); },
     promptKey, reconcileDraft, (error: unknown) => { context.errors.push(error); },
   ) as () => Promise<void>;
   return { context, refresh };
@@ -153,4 +176,72 @@ test("登录会话改变后，旧刷新响应失效", async () => {
   context.responses[0]!.resolve({ channels: [], prompts: [{ ...prompt, revision: "1" }] });
   await pending;
   assert.equal(context.platform.prompts[0]?.revision, "0");
+});
+
+test("保存确认立即更新目录版本，后续目录读取延迟时不产生假冲突", async () => {
+  const submitted = { ...newDraft(prompt), content: "new content" };
+  const state = draftState(submitted);
+  const response = deferred<Prompt>();
+  const refreshed = deferred<void>();
+  let waitingForRefresh = false;
+  const pending = saveHandler("content", submitted, state.onDraft, response.promise, {
+    ...state,
+    onRefresh: () => { waitingForRefresh = true; return refreshed.promise; },
+  })();
+  response.resolve({ ...prompt, content: submitted.content, revision: `1:${"a".repeat(64)}` });
+  await Promise.resolve();
+  try {
+    assert.equal(waitingForRefresh, true);
+    assert.equal(state.context.platform.prompts[0]?.revision, state.context.drafts[key]?.revision);
+    assert.equal(state.context.platform.prompts[0]?.content, submitted.content);
+  } finally { refreshed.resolve(); await pending; }
+});
+
+test("备注保存确认立即更新目录备注版本，保留保存后的输入", async () => {
+  const submitted = { ...newDraft(prompt), note: "submitted note" };
+  const state = draftState(submitted);
+  const response = deferred<{ saved: boolean }>();
+  const refreshed = deferred<void>();
+  const pending = saveHandler("note", submitted, state.onDraft, response.promise, {
+    ...state, onRefresh: () => refreshed.promise,
+  })();
+  state.onDraft({ note: "later note" });
+  response.resolve({ saved: true });
+  await Promise.resolve();
+  try {
+    assert.equal(state.context.platform.prompts[0]?.noteRevision, state.context.drafts[key]?.noteRevision);
+    assert.equal(state.context.platform.prompts[0]?.note, submitted.note);
+    assert.equal(state.context.drafts[key]?.note, "later note");
+  } finally { refreshed.resolve(); await pending; }
+});
+
+test("保存确认使此前发出的目录读取失效，旧目录不能回退保存版本", async () => {
+  const submitted = { ...newDraft(prompt), content: "new content" };
+  const state = draftState(submitted);
+  const { refresh } = refreshState(state.context);
+  const oldRefresh = refresh();
+  const response = deferred<Prompt>();
+  const pending = saveHandler("content", submitted, state.onDraft, response.promise, state)();
+  const saved = { ...prompt, content: submitted.content, revision: `1:${"b".repeat(64)}` };
+  response.resolve(saved);
+  await pending;
+  state.context.responses[0]!.resolve({ channels: [], prompts: [prompt] });
+  await oldRefresh;
+  assert.equal(state.context.platform.prompts[0]?.revision, saved.revision);
+  assert.equal(state.context.drafts[key]?.revision, saved.revision);
+});
+
+test("已经排队的旧目录状态更新在保存后也不能覆盖确认版本", async () => {
+  const submitted = { ...newDraft(prompt), content: "new content" };
+  const state = draftState(submitted);
+  const queued: (() => void)[] = [];
+  const { refresh } = refreshState(state.context, queued);
+  const oldRefresh = refresh();
+  state.context.responses[0]!.resolve({ channels: [], prompts: [prompt] });
+  await oldRefresh;
+  const saved = { ...prompt, content: submitted.content, revision: `1:${"c".repeat(64)}` };
+  state.onContentSaved(submitted, saved);
+  for (const update of queued) update();
+  assert.equal(state.context.platform.prompts[0]?.revision, saved.revision);
+  assert.equal(state.context.drafts[key]?.revision, saved.revision);
 });
