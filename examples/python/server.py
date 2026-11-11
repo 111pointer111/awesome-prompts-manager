@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 import json
 import os
@@ -16,8 +17,9 @@ DEFAULT = "请根据 {topics} 评价文章的实际价值。"
 
 
 class PromptStore:
-    def __init__(self, path: str) -> None:
+    def __init__(self, path: str, default_content: str = DEFAULT) -> None:
         self.path = path
+        self.default_content = default_content
         Path(path).parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         with self.connect() as db:
             db.execute("PRAGMA journal_mode=WAL")
@@ -38,12 +40,13 @@ class PromptStore:
             content, revision = db.execute("SELECT content,revision FROM prompts WHERE id=1").fetchone()
         return self.document(content, revision)
 
-    @staticmethod
-    def document(content: str | None, revision: int) -> dict:
+    def document(self, content: str | None, revision: int) -> dict:
+        effective = content if content is not None else self.default_content
+        fingerprint = hashlib.sha256(json.dumps([self.default_content, effective], ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
         return {
             "id": "article-review", "name": "文章评分", "description": "示例文章评分的业务偏好模板",
-            "content": content if content is not None else DEFAULT, "defaultContent": DEFAULT,
-            "revision": str(revision), "customized": content is not None, "readOnly": False, "maxLength": 16000,
+            "content": effective, "defaultContent": self.default_content,
+            "revision": f"{revision}:{fingerprint}", "customized": content is not None, "readOnly": False, "maxLength": 16000,
             "variables": [{"name": "topics", "description": "本次任务的兴趣话题，由业务填入"}],
             "composition": ["本条评分偏好", "业务固定的输出格式要求"],
             "effect": "下一项文章评审开始时读取并固定到本项任务结束",
@@ -58,9 +61,11 @@ class PromptStore:
         if content is not None and (not isinstance(content, str) or not content.strip() or len(content.encode("utf-16-le")) // 2 > 16000 or "{topics}" not in content):
             raise ValueError("模板需包含 {topics}，且长度在 1～16000 之间")
         with self.connect() as db:
-            changed = db.execute("UPDATE prompts SET content=?,revision=revision+1 WHERE id=1 AND CAST(revision AS TEXT)=?", (content, revision))
-            if not changed.rowcount:
+            db.execute("BEGIN IMMEDIATE")
+            current = db.execute("SELECT content,revision FROM prompts WHERE id=1").fetchone()
+            if self.document(*current)["revision"] != revision:
                 raise Conflict("版本已改变")
+            db.execute("UPDATE prompts SET content=?,revision=revision+1 WHERE id=1", (content,))
             saved = db.execute("SELECT content,revision FROM prompts WHERE id=1").fetchone()
             result = self.document(*saved)
         return result

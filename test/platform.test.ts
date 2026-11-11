@@ -6,11 +6,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { createExample } from "../examples/typescript/server.js";
+import { ExamplePromptStore } from "../examples/typescript/store.js";
 import { createApp } from "../server/app.js";
 import { Channels, normalizeUrl } from "../server/channels.js";
 import { decryptToken, encryptToken } from "../server/crypto.js";
 import { Store } from "../server/store.js";
-import type { PlatformState } from "../shared/protocol.js";
+import type { PlatformState, Prompt } from "../shared/protocol.js";
 import { catalogSchema } from "../shared/protocol.js";
 
 const sourceToken = "synthetic-source-credential-for-testing";
@@ -81,16 +82,22 @@ test("save reads back business version, detects stale writes, and restores defau
   try {
     await f.login(); const id = await f.add();
     const path = `/api/channels/${id}/prompts/article-review`;
-    const saved = await f.request(path, "PUT", { content: "新版 {topics} 评分", expectedRevision: "0" });
+    const original = f.example.store.get();
+    const saved = await f.request(path, "PUT", { content: "新版 {topics} 评分", expectedRevision: original.revision });
     assert.equal(saved.status, 200);
-    assert.equal((await saved.json()).revision, "1");
+    const updated = await saved.json() as Prompt;
+    assert.notEqual(updated.revision, original.revision);
+    assert.match(updated.revision, /^\d+:[0-9a-f]{64}$/);
     assert.equal(f.example.store.snapshot("实践").system.includes("新版 实践"), true);
-    assert.equal((await f.request(path, "PUT", { content: "旧页面 {topics}", expectedRevision: "0" })).status, 409);
-    assert.equal((await f.request(path, "PUT", { content: "丢失变量", expectedRevision: "1" })).status, 400);
-    const reset = await f.request(path, "PUT", { content: null, expectedRevision: "1" });
+    assert.equal((await f.request(path, "PUT", { content: "旧页面 {topics}", expectedRevision: original.revision })).status, 409);
+    assert.equal((await f.request(path, "PUT", { content: "丢失变量", expectedRevision: updated.revision })).status, 400);
+    const reset = await f.request(path, "PUT", { content: null, expectedRevision: updated.revision });
     assert.equal(reset.status, 200);
-    assert.equal((await reset.json()).customized, false);
-    assert.equal(f.store.prompt(id, "article-review").revision, "2");
+    const restored = await reset.json() as Prompt;
+    assert.equal(restored.customized, false);
+    assert.equal(restored.content, original.defaultContent);
+    assert.notEqual(restored.revision, updated.revision);
+    assert.equal(f.store.prompt(id, "article-review").revision, restored.revision);
   } finally { await f.close(); }
 });
 
@@ -120,10 +127,12 @@ test("per-channel serialization keeps an older sync from overwriting a saved pro
   const f = await fixture();
   try {
     await f.login(); const id = await f.add();
+    const originalRevision = f.example.store.get().revision;
     const sync = f.platform.channels.sync(id);
-    const save = f.platform.channels.save(id, "article-review", { content: "并发 {topics}", expectedRevision: "0" });
-    await Promise.all([sync, save]);
-    assert.equal(f.store.prompt(id, "article-review").revision, "1");
+    const save = f.platform.channels.save(id, "article-review", { content: "并发 {topics}", expectedRevision: originalRevision });
+    const [, saved] = await Promise.all([sync, save]);
+    assert.notEqual(saved.revision, originalRevision);
+    assert.equal(f.store.prompt(id, "article-review").revision, saved.revision);
     assert.equal(f.store.prompt(id, "article-review").content, "并发 {topics}");
   } finally { await f.close(); }
 });
@@ -202,7 +211,7 @@ test("a success response that ignored the requested edit is reported unconfirmed
     const unchanged = f.example.store.get();
     const badUpstream: typeof fetch = async () => new Response(JSON.stringify(unchanged));
     const manager = new Channels(f.store, key, badUpstream);
-    await assert.rejects(manager.save(id, "article-review", { content: "本次提交 {topics}", expectedRevision: "0" }), /保存结果待确认/);
+    await assert.rejects(manager.save(id, "article-review", { content: "本次提交 {topics}", expectedRevision: unchanged.revision }), /保存结果待确认/);
     assert.equal(f.store.prompt(id, "article-review").content, unchanged.content);
     assert.match(f.store.channel(id).error!, /保存结果待确认/);
   } finally { await f.close(); }
@@ -258,11 +267,12 @@ test("a remote version conflict immediately refreshes the comparison snapshot", 
   const f = await fixture();
   try {
     await f.login(); const id = await f.add();
-    f.example.store.save({ content: "业务其他入口已更新 {topics}", expectedRevision: "0" });
-    const result = await f.request(`/api/channels/${id}/prompts/article-review`, "PUT", { content: "当前页面的修改 {topics}", expectedRevision: "0" });
+    const originalRevision = f.example.store.get().revision;
+    const other = f.example.store.save({ content: "业务其他入口已更新 {topics}", expectedRevision: originalRevision });
+    const result = await f.request(`/api/channels/${id}/prompts/article-review`, "PUT", { content: "当前页面的修改 {topics}", expectedRevision: originalRevision });
     assert.equal(result.status, 409);
     const state = await (await f.request("/api/state")).json() as PlatformState;
-    assert.equal(state.prompts[0]?.revision, "1");
+    assert.equal(state.prompts[0]?.revision, other.revision);
     assert.equal(state.prompts[0]?.content, "业务其他入口已更新 {topics}");
   } finally { await f.close(); }
 });
@@ -270,10 +280,12 @@ test("a remote version conflict immediately refreshes the comparison snapshot", 
 test("authenticated body requests cover the advertised UTF-16 template range", async () => {
   const example = createExample(":memory:", sourceToken);
   let current = { ...example.store.get(), maxLength: 131072, variables: [] };
+  const originalRevision = current.revision;
+  const savedRevision = "saved-large-template-version";
   const upstream: typeof fetch = async (url, init) => {
     if (init?.method === "PUT") {
       const update = JSON.parse(String(init.body));
-      current = { ...current, content: update.content, revision: "1", customized: true };
+      current = { ...current, content: update.content, revision: savedRevision, customized: true };
     }
     const body = String(url).endsWith("/v1/prompts")
       ? { protocolVersion: 1, service: { id: "large-example", name: "Large example" }, prompts: [current] }
@@ -284,10 +296,49 @@ test("authenticated body requests cover the advertised UTF-16 template range", a
   try {
     await f.login(); const id = await f.add();
     const content = "中".repeat(100000);
-    const response = await f.request(`/api/channels/${id}/prompts/article-review`, "PUT", { content, expectedRevision: "0" });
+    const response = await f.request(`/api/channels/${id}/prompts/article-review`, "PUT", { content, expectedRevision: originalRevision });
     assert.equal(response.status, 200);
     const saved = await response.json();
     assert.equal(saved.content.length, 100000);
-    assert.equal(saved.revision, "1");
+    assert.equal(saved.revision, savedRevision);
   } finally { example.store.close(); await f.close(); }
+});
+
+test("reference store detects default upgrades while preserving overrides and task snapshots", () => {
+  const directory = mkdtempSync(join(tmpdir(), "prompts-defaults-"));
+  const path = join(directory, "example.sqlite");
+  const original = new ExamplePromptStore(path);
+  const firstDefault = original.get();
+  const originalTask = original.snapshot("实践");
+  const upgradedDefault = "请根据 {topics} 优先评价工程依据。";
+  const upgraded = new ExamplePromptStore(path, upgradedDefault);
+  const latestDefault = "请根据 {topics} 审核可复用经验。";
+  let reopened: ExamplePromptStore | undefined;
+  let latest: ExamplePromptStore | undefined;
+  try {
+    const current = upgraded.get();
+    assert.equal(current.content, upgradedDefault);
+    assert.notEqual(current.revision, firstDefault.revision);
+    assert.throws(() => upgraded.save({ content: "旧页面的修改 {topics}", expectedRevision: firstDefault.revision }), { status: 409 });
+    const custom = upgraded.save({ content: "自定义规则 {topics}", expectedRevision: current.revision });
+    reopened = new ExamplePromptStore(path, upgradedDefault);
+    assert.equal(reopened.get().revision, custom.revision);
+    assert.equal(reopened.get().content, custom.content);
+    latest = new ExamplePromptStore(path, latestDefault);
+    const afterUpgrade = latest.get();
+    assert.equal(afterUpgrade.content, custom.content);
+    assert.equal(afterUpgrade.defaultContent, latestDefault);
+    assert.equal(afterUpgrade.customized, true);
+    assert.notEqual(afterUpgrade.revision, custom.revision);
+    assert.throws(() => latest!.save({ content: null, expectedRevision: custom.revision }), { status: 409 });
+    const reset = latest.save({ content: null, expectedRevision: afterUpgrade.revision });
+    assert.equal(reset.content, latestDefault);
+    assert.equal(reset.customized, false);
+    assert.notEqual(reset.revision, afterUpgrade.revision);
+    assert.equal(originalTask.revision, firstDefault.revision);
+    assert.equal(originalTask.system.startsWith(firstDefault.content.replaceAll("{topics}", "实践")), true);
+  } finally {
+    original.close(); upgraded.close(); reopened?.close(); latest?.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
