@@ -41,13 +41,15 @@ export function App() {
   const refresh = useCallback(async () => {
     const startedAt = epoch.current;
     const requestId = ++refreshSequence.current;
-    const isCurrent = () => authenticatedRef.current && startedAt === epoch.current && requestId === refreshSequence.current;
+    const sameSession = () => authenticatedRef.current && startedAt === epoch.current;
+    const isCurrent = () => sameSession() && requestId === refreshSequence.current;
     try {
       const next = await api<PlatformState>("/api/state");
       if (!isCurrent()) return;
-      setPlatform(previous => isCurrent() ? next : previous);
+      // Accepted reads keep FIFO order with saves, so a later save can compare the already-received version.
+      setPlatform(previous => sameSession() ? next : previous);
       setDrafts(previous => {
-        if (!isCurrent()) return previous;
+        if (!sameSession()) return previous;
         const reconciled = { ...previous };
         for (const prompt of next.prompts) {
           const key = promptKey(prompt);

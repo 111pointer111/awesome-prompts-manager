@@ -22,18 +22,20 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-function draftState(initial: Draft) {
+function draftState(initial: Draft, queued?: (() => void)[]) {
+  const apply = (operation: () => void) => { if (queued) queued.push(operation); else operation(); };
   const context = {
     platform: { channels: [], prompts: [prompt] } as PlatformState,
     drafts: { [key]: initial } as Record<string, Draft>, epoch: { current: 1 }, authenticated: { current: true },
     sequence: { current: 0 }, responses: [] as ReturnType<typeof deferred<PlatformState>>[], errors: [] as unknown[],
+    apply,
   };
   const begin = app.indexOf("  function updateDraft(");
   const text = app.slice(begin, app.indexOf("\n\n  function ", begin + 10))
     .replace(/update: (?:Partial<Draft>|DraftUpdate)/, "update");
   const onDraft = new Function("selected", "authenticatedRef", "epoch", "draftEpoch", "promptKey", "newDraft", "setDrafts", text + "; return updateDraft;")(
     prompt, context.authenticated, context.epoch, 1, promptKey, newDraft,
-    (update: (previous: Record<string, Draft>) => Record<string, Draft>) => { context.drafts = update(context.drafts); },
+    (update: (previous: Record<string, Draft>) => Record<string, Draft>) => { apply(() => { context.drafts = update(context.drafts); }); },
   ) as (update: DraftUpdate) => void;
   function handler(name: "contentSaved" | "noteSaved") {
     const begin = app.indexOf(`  function ${name}(`);
@@ -41,7 +43,7 @@ function draftState(initial: Draft) {
     const javascript = ts.transpile(text, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None });
     return new Function("selected", "authenticatedRef", "epoch", "draftEpoch", "promptKey", "refreshSequence", "setPlatform", "updateDraft", "mergeContentSave", "mergeNoteSave", javascript + `; return ${name};`)(
       prompt, context.authenticated, context.epoch, 1, promptKey, context.sequence,
-      (update: (previous: PlatformState) => PlatformState) => { context.platform = update(context.platform); },
+      (update: (previous: PlatformState) => PlatformState) => { apply(() => { context.platform = update(context.platform); }); },
       onDraft, mergeContentSave, mergeNoteSave,
     );
   }
@@ -132,15 +134,14 @@ test("登出并重新登录后，旧 Editor 保存回调不会恢复已清除的
   assert.deepEqual(context.drafts, {});
 });
 
-function refreshState(context = draftState(newDraft(prompt)).context, queued?: (() => void)[]) {
-  const apply = (operation: () => void) => { if (queued) queued.push(operation); else operation(); };
+function refreshState(context = draftState(newDraft(prompt)).context) {
   const text = app.slice(app.indexOf("  const refresh = useCallback"), app.indexOf("\n\n  const synchronize"))
     .replace("api<PlatformState>", "api");
   const refresh = new Function("useCallback", "epoch", "refreshSequence", "api", "authenticatedRef", "setPlatform", "setDrafts", "promptKey", "reconcileDraft", "handleError", text + "; return refresh;")(
     (fn: unknown) => fn, context.epoch, context.sequence,
     () => { const response = deferred<PlatformState>(); context.responses.push(response); return response.promise; },
-    context.authenticated, (update: PlatformState | ((previous: PlatformState) => PlatformState)) => { apply(() => { context.platform = typeof update === "function" ? update(context.platform) : update; }); },
-    (update: (previous: Record<string, Draft>) => Record<string, Draft>) => { apply(() => { context.drafts = update(context.drafts); }); },
+    context.authenticated, (update: PlatformState | ((previous: PlatformState) => PlatformState)) => { context.apply(() => { context.platform = typeof update === "function" ? update(context.platform) : update; }); },
+    (update: (previous: Record<string, Draft>) => Record<string, Draft>) => { context.apply(() => { context.drafts = update(context.drafts); }); },
     promptKey, reconcileDraft, (error: unknown) => { context.errors.push(error); },
   ) as () => Promise<void>;
   return { context, refresh };
@@ -231,11 +232,11 @@ test("保存确认使此前发出的目录读取失效，旧目录不能回退�
   assert.equal(state.context.drafts[key]?.revision, saved.revision);
 });
 
-test("已经排队的旧目录状态更新在保存后也不能覆盖确认版本", async () => {
+test("按 FIFO 应用旧目录 0 与后续保存 1，最终保留保存确认版本", async () => {
   const submitted = { ...newDraft(prompt), content: "new content" };
-  const state = draftState(submitted);
   const queued: (() => void)[] = [];
-  const { refresh } = refreshState(state.context, queued);
+  const state = draftState(submitted, queued);
+  const { refresh } = refreshState(state.context);
   const oldRefresh = refresh();
   state.context.responses[0]!.resolve({ channels: [], prompts: [prompt] });
   await oldRefresh;
@@ -244,4 +245,65 @@ test("已经排队的旧目录状态更新在保存后也不能覆盖确认版�
   for (const update of queued) update();
   assert.equal(state.context.platform.prompts[0]?.revision, saved.revision);
   assert.equal(state.context.drafts[key]?.revision, saved.revision);
+});
+
+test("按 FIFO 应用较新目录 2 与迟到保存 1，刷新失败仍保留新版和后续输入", async () => {
+  const submitted = { ...newDraft(prompt), content: "submitted A" };
+  const queued: (() => void)[] = [];
+  const state = draftState(submitted, queued);
+  const { refresh } = refreshState(state.context);
+  const response = deferred<Prompt>();
+  const pending = saveHandler("content", submitted, state.onDraft, response.promise, { ...state, onRefresh: refresh })();
+  const sync = refresh();
+  const newer = { ...prompt, content: "newer B", revision: "2" };
+  state.context.responses[0]!.resolve({ channels: [], prompts: [newer] });
+  await sync;
+  state.onDraft({ content: "later C" });
+  response.resolve({ ...prompt, content: submitted.content, revision: "1" });
+  await Promise.resolve();
+  state.context.responses[1]!.reject(new Error("follow-up refresh failed"));
+  await pending;
+  for (const update of queued) update();
+  assert.equal(state.context.platform.prompts[0]?.revision, "2");
+  assert.equal(state.context.platform.prompts[0]?.content, "newer B");
+  assert.equal(state.context.drafts[key]?.content, "later C");
+  assert.equal(state.context.drafts[key]?.baseContent, submitted.content);
+  assert.equal(state.context.drafts[key]?.revision, "1");
+  assert.equal(contentDirty(state.context.drafts[key]!), true);
+  assert.equal(state.context.errors.length, 1);
+});
+
+test("较新备注 2 入队后迟到保存 1，按 FIFO 保留新版备注与后续草稿", async () => {
+  const submitted = { ...newDraft(prompt), note: "submitted note A" };
+  const queued: (() => void)[] = [];
+  const state = draftState(submitted, queued);
+  const { refresh } = refreshState(state.context);
+  const pending = refresh();
+  state.context.responses[0]!.resolve({ channels: [], prompts: [{ ...prompt, note: "newer note B", noteRevision: 2 }] });
+  await pending;
+  state.onDraft({ note: "later note C" });
+  state.onNoteSaved(submitted);
+  for (const update of queued) update();
+  assert.equal(state.context.platform.prompts[0]?.noteRevision, 2);
+  assert.equal(state.context.platform.prompts[0]?.note, "newer note B");
+  assert.equal(state.context.drafts[key]?.note, "later note C");
+  assert.equal(state.context.drafts[key]?.baseNote, submitted.note);
+  assert.equal(state.context.drafts[key]?.noteRevision, 1);
+  assert.equal(noteDirty(state.context.drafts[key]!), true);
+});
+
+test("已接收目录的 FIFO 更新仍在会话改变时失效", async () => {
+  const queued: (() => void)[] = [];
+  const state = draftState(newDraft(prompt), queued);
+  const { refresh } = refreshState(state.context);
+  const pending = refresh();
+  state.context.responses[0]!.resolve({ channels: [], prompts: [{ ...prompt, revision: "2" }] });
+  await pending;
+  state.context.epoch.current += 1;
+  state.context.authenticated.current = false;
+  state.context.platform = { channels: [], prompts: [] };
+  state.context.drafts = {};
+  for (const update of queued) update();
+  assert.deepEqual(state.context.platform.prompts, []);
+  assert.deepEqual(state.context.drafts, {});
 });
