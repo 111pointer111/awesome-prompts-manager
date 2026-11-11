@@ -1,0 +1,21 @@
+services:
+  app:
+    build: .
+    image: awesome-prompts-manager:local
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "127.0.0.1:${HOST_PORT:-3300}:3300"
+    volumes:
+      - ./data:/app/data
+    mem_limit: 256m
+    pids_limit: 128
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3300/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
