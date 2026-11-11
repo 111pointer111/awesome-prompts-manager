@@ -283,3 +283,32 @@ textarea:focus { outline: 0; border: 0; }
   .content-input, .note-input { font-size: 18px; }
 }
 .is-fallback .scroll-editor-overlay { border-radius: 30px; }
+
+/* Scene information is revealed by object hover or keyboard focus. */
+.canister-nameplate, .scroll-nameplate { opacity: 0; pointer-events: none; transition: opacity 120ms ease-out; }
+.canister-nameplate.is-revealed, .scroll-nameplate.is-revealed,
+.canister-nameplate:focus-visible, .scroll-nameplate:focus-visible,
+.canister-nameplate:hover, .scroll-nameplate:hover { opacity: 1; pointer-events: auto; }
+.is-fallback .canister-nameplate, .is-fallback .scroll-nameplate { opacity: 1; pointer-events: auto; }
+.desk-brand, .desk-brand:hover:not(:disabled) { padding: 9px 12px; border-radius: 22px; background: #f2ecdcf5; color: #182f2b; text-decoration: none; }
+.desk-tools { padding: 3px 6px; border-radius: 999px; background: #f2ecdcf2; color: #182f2b; }
+.scene-breadcrumb { right: auto; width: max-content; max-width: calc(100% - 64px); padding: 4px 6px; border-radius: 999px; background: #f2ecdcf5; color: #182f2b; font-size: 15px; font-weight: 600; }
+.scene-breadcrumb button { font-size: 15px; }
+.scene-breadcrumb > span { max-width: min(45vw, 240px); }
+.scroll-pager { top: 148px; padding: 4px 7px; border-radius: 999px; background: #f2ecdcf5; color: #182f2b; font-size: 14px; font-weight: 550; }
+.scroll-pager button { font-size: 15px; }
+.scroll-pager button:disabled, .channel-pager button:disabled { opacity: 1; color: #596457; }
+.channel-pager button, .channel-pager > span { border-radius: 999px; background: #f2ecdcf5; color: #182f2b; }
+@media (max-width: 699px) {
+  .desk-header { gap: 10px; }
+  .desk-brand, .desk-brand:hover:not(:disabled) { padding: 7px 10px; border-radius: 18px; }
+  .desk-tools { border-radius: 22px; }
+  .scene-breadcrumb { top: 104px; max-width: calc(100% - 30px); font-size: 13px; gap: 6px; }
+  .scene-breadcrumb button { font-size: 13px; padding: 5px 8px; }
+  .scroll-pager { top: 154px; gap: 4px; font-size: 12px; }
+  .scroll-pager button { font-size: 13px; padding: 6px; }
+  .channel-pager button { font-size: 12px; }
+  .offline-caption { top: 210px; }
+}
+.desk-brand > span:last-child { line-height: 1.2; }
+.desk-brand small { line-height: 1.3; }

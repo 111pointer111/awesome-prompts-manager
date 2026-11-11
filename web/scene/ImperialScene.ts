@@ -16,6 +16,10 @@ export interface SceneSelection {
   channelId: string | null;
   promptId: string | null;
 }
+export interface SceneTarget {
+  kind: "channel" | "prompt";
+  id: string;
+}
 export interface ScreenPoint {
   x: number;
   y: number;
@@ -32,6 +36,7 @@ export interface SceneLayout {
 interface Callbacks {
   onPick: (kind: "channel" | "prompt", id: string) => void;
   onPhase: (phase: DeskPhase, selection: SceneSelection) => void;
+  onHover: (target: SceneTarget | null) => void;
   onLayout: (layout: SceneLayout) => void;
   onFailure: () => void;
 }
@@ -57,6 +62,7 @@ export class ImperialScene {
   private height = 1;
   private selection: SceneSelection = { channelId: null, promptId: null };
   private phase: DeskPhase = "overview";
+  private hoverTarget: SceneTarget | null = null;
   private unroll = { value: 0 };
   private observer: ResizeObserver;
   private reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -158,6 +164,7 @@ export class ImperialScene {
     this.observer.observe(host);
     this.renderer.domElement.addEventListener("click", this.pick);
     this.renderer.domElement.addEventListener("pointermove", this.hover);
+    this.renderer.domElement.addEventListener("pointerleave", this.leave);
     this.renderer.domElement.addEventListener(
       "webglcontextlost",
       this.contextLost,
@@ -251,6 +258,7 @@ export class ImperialScene {
       this.render();
       return;
     }
+    this.setHoverTarget(null);
     this.selection = { ...selection };
     const generation = ++this.generation;
     this.cancelAnimations();
@@ -608,8 +616,7 @@ export class ImperialScene {
     for (const hit of this.raycaster.intersectObjects(objects, true)) {
       let object: THREE.Object3D | null = hit.object;
       while (object && !object.userData.kind) object = object.parent;
-      if (object?.userData.kind)
-        return object.userData as { kind: "channel" | "prompt"; id: string };
+      if (object?.userData.kind) return object.userData as SceneTarget;
     }
     return null;
   }
@@ -624,10 +631,26 @@ export class ImperialScene {
     const hit = this.hit(event);
     if (hit) this.callbacks.onPick(hit.kind, hit.id);
   };
+  private setHoverTarget(target: SceneTarget | null) {
+    if (
+      this.hoverTarget?.kind === target?.kind &&
+      this.hoverTarget?.id === target?.id
+    )
+      return;
+    this.hoverTarget = target;
+    this.callbacks.onHover(target);
+  }
   private hover = (event: MouseEvent) => {
-    this.renderer.domElement.style.cursor = this.hit(event)
-      ? "pointer"
-      : "default";
+    const hit =
+      this.selection.promptId || this.phase === "rolling"
+        ? null
+        : this.hit(event);
+    this.renderer.domElement.style.cursor = hit ? "pointer" : "default";
+    this.setHoverTarget(hit);
+  };
+  private leave = () => {
+    this.renderer.domElement.style.cursor = "default";
+    this.setHoverTarget(null);
   };
   private contextLost = (event: Event) => {
     event.preventDefault();
@@ -660,6 +683,7 @@ export class ImperialScene {
     this.reducedMotion.removeEventListener("change", this.motionChanged);
     this.renderer.domElement.removeEventListener("click", this.pick);
     this.renderer.domElement.removeEventListener("pointermove", this.hover);
+    this.renderer.domElement.removeEventListener("pointerleave", this.leave);
     this.renderer.domElement.removeEventListener(
       "webglcontextlost",
       this.contextLost,

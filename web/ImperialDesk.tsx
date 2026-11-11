@@ -14,6 +14,7 @@ import type {
   ImperialScene,
   SceneLayout,
   SceneSelection,
+  SceneTarget,
   ScreenPoint,
 } from "./scene/ImperialScene";
 
@@ -127,6 +128,8 @@ export function ImperialDesk({
   const [phase, setPhase] = useState<DeskPhase>("overview");
   const [settledKey, setSettledKey] = useState<string | null>(null);
   const [layout, setLayout] = useState(initialLayout);
+  const [hovered, setHovered] = useState<SceneTarget | null>(null);
+  const hoverHide = useRef<number | undefined>(undefined);
   const [panel, setPanel] = useState<"search" | "channels" | "account" | null>(
     null,
   );
@@ -177,13 +180,26 @@ export function ImperialDesk({
   const selection: SceneSelection = { channelId, promptId: selectedKey };
   latest.current = selection;
 
+  function reportHover(target: SceneTarget | null) {
+    window.clearTimeout(hoverHide.current);
+    if (target) setHovered(target);
+    else hoverHide.current = window.setTimeout(() => setHovered(null), 140);
+  }
+
+  function resetHover() {
+    window.clearTimeout(hoverHide.current);
+    setHovered(null);
+  }
+
   function openChannel(id: string) {
+    resetHover();
     setChannelId(id);
     setPromptPage(0);
     setSettledKey(null);
     onSelect(null);
   }
   function openPrompt(key: string) {
+    resetHover();
     const prompt = platform.prompts.find((item) => promptKey(item) === key);
     if (!prompt) return;
     if (key === selectedKey) {
@@ -214,6 +230,7 @@ export function ImperialDesk({
   actions.current = { openChannel, openPrompt };
 
   function back() {
+    resetHover();
     if (selectedKey) {
       setSettledKey(null);
       onSelect(null);
@@ -282,6 +299,7 @@ export function ImperialDesk({
             kind === "channel"
               ? actions.current.openChannel(id)
               : actions.current.openPrompt(id),
+          onHover: reportHover,
           onPhase: (nextPhase, target) => {
             if (
               !active ||
@@ -289,6 +307,7 @@ export function ImperialDesk({
               target.promptId !== latest.current.promptId
             )
               return;
+            resetHover();
             setPhase(nextPhase);
             setSettledKey(nextPhase === "editing" ? target.promptId : null);
           },
@@ -313,6 +332,7 @@ export function ImperialDesk({
       });
     return () => {
       active = false;
+      window.clearTimeout(hoverHide.current);
       scene.current?.dispose();
       scene.current = null;
     };
@@ -399,13 +419,21 @@ export function ImperialDesk({
       <button
         type="button"
         key={key}
-        className={directory ? "directory-item" : "scroll-nameplate"}
+        className={
+          directory
+            ? "directory-item"
+            : `scroll-nameplate ${hovered?.kind === "prompt" && hovered.id === key ? "is-revealed" : ""}`
+        }
         style={
           directory || fallback ? undefined : position(layout.prompts[key])
         }
         onClick={() => openPrompt(key)}
         aria-label={`展开${prompt.name}`}
         data-prompt-key={key}
+        onPointerEnter={
+          directory ? undefined : () => reportHover({ kind: "prompt", id: key })
+        }
+        onPointerLeave={directory ? undefined : () => reportHover(null)}
         onKeyDown={selectAdjacent}
       >
         <span>
@@ -522,12 +550,16 @@ export function ImperialDesk({
             {channels.map((channel) => (
               <button
                 type="button"
-                className={`canister-nameplate ${channelId === channel.id ? "active" : ""}`}
+                className={`canister-nameplate ${channelId === channel.id ? "active" : ""} ${hovered?.kind === "channel" && hovered.id === channel.id ? "is-revealed" : ""}`}
                 key={channel.id}
                 hidden={!fallback && !layout.channels[channel.id]}
                 style={
                   fallback ? undefined : position(layout.channels[channel.id])
                 }
+                onPointerEnter={() =>
+                  reportHover({ kind: "channel", id: channel.id })
+                }
+                onPointerLeave={() => reportHover(null)}
                 onClick={() => openChannel(channel.id)}
                 onKeyDown={selectAdjacent}
                 aria-pressed={channelId === channel.id}

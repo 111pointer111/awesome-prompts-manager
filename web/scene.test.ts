@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import * as THREE from "three";
 import { ImperialScene } from "./scene/ImperialScene";
-import type { DeskPhase, SceneSelection } from "./scene/ImperialScene";
+import type {
+  DeskPhase,
+  SceneSelection,
+  SceneTarget,
+} from "./scene/ImperialScene";
 import { disposeObject, makeScroll, setUnroll } from "./scene/objects";
 import type { ScrollObject } from "./scene/objects";
 
@@ -32,6 +36,7 @@ test("展卷时木轴实际分离，绸面只显露原有 UV 区域", () => {
 function sceneWithDeferredAnimation() {
   const phases: { phase: DeskPhase; selection: SceneSelection }[] = [];
   const completions: (() => void)[] = [];
+  const hovers: (SceneTarget | null)[] = [];
   let cancelled = 0;
   const scrolls: { id: string; object: ScrollObject; target: THREE.Vector3 }[] =
     [];
@@ -51,6 +56,7 @@ function sceneWithDeferredAnimation() {
     unroll: { value: 0 },
     camera: new THREE.PerspectiveCamera(),
     callbacks: {
+      onHover: (target: SceneTarget | null) => hovers.push(target),
       onPhase: (phase: DeskPhase, selection: SceneSelection) =>
         phases.push({ phase, selection }),
     },
@@ -74,6 +80,7 @@ function sceneWithDeferredAnimation() {
     scene,
     phases,
     completions,
+    hovers,
     expanded,
     scrolls,
     cancelled: () => cancelled,
@@ -160,5 +167,23 @@ test("从飞卷当前位置与尺寸连续进入展卷", () => {
       0.000001,
   );
   disposeObject(object.group);
+  disposeObject(f.expanded.group);
+});
+
+test("悬浮信息按物体类型和 ID 更新，同一物体内移动不重复触发", () => {
+  const f = sceneWithDeferredAnimation();
+  const hover = Reflect.get(f.scene, "setHoverTarget") as (
+    target: SceneTarget | null,
+  ) => void;
+  hover.call(f.scene, { kind: "channel", id: "a" });
+  hover.call(f.scene, { kind: "channel", id: "a" });
+  hover.call(f.scene, { kind: "prompt", id: "a" });
+  hover.call(f.scene, null);
+  hover.call(f.scene, null);
+  assert.deepEqual(f.hovers, [
+    { kind: "channel", id: "a" },
+    { kind: "prompt", id: "a" },
+    null,
+  ]);
   disposeObject(f.expanded.group);
 });
