@@ -11,6 +11,7 @@ import { Channels, normalizeUrl } from "../server/channels.js";
 import { decryptToken, encryptToken } from "../server/crypto.js";
 import { Store } from "../server/store.js";
 import type { PlatformState } from "../shared/protocol.js";
+import { catalogSchema } from "../shared/protocol.js";
 
 const sourceToken = "synthetic-source-credential-for-testing";
 const key = Buffer.alloc(32, 7);
@@ -234,4 +235,17 @@ test("login throttling separates client identities supplied by the trusted ingre
     const other = await f.request("/api/login", "POST", { username: "admin", password: "synthetic-admin-password" }, false, true, { "X-Forwarded-For": "203.0.113.2" });
     assert.equal(other.status, 200);
   } finally { await f.close(); }
+});
+
+test("oversized malformed catalogs produce bounded validation failures", () => {
+  const result = catalogSchema.safeParse({ protocolVersion: 1, service: { id: "fixture", name: "Fixture" }, prompts: Array(10001).fill(null) });
+  assert.equal(result.success, false);
+  if (!result.success) assert.equal(result.error.issues.length, 1);
+  const f = createExample(":memory:", sourceToken);
+  try {
+    const prompt = { ...f.store.get(), variables: Array(10001).fill(null), composition: Array(10001).fill(null) };
+    const nested = catalogSchema.safeParse({ protocolVersion: 1, service: { id: "fixture", name: "Fixture" }, prompts: [prompt] });
+    assert.equal(nested.success, false);
+    if (!nested.success) assert.equal(nested.error.issues.length, 2);
+  } finally { f.store.close(); }
 });

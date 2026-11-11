@@ -11,14 +11,15 @@ export const promptSchema = z.object({
   customized: z.boolean(),
   readOnly: z.boolean(),
   maxLength: z.number().int().positive().max(131072),
-  variables: z.array(z.object({ name: identifier, description: z.string().max(2000) })).max(100),
-  composition: z.array(z.string().max(2000)).max(100),
+  variables: z.array(z.unknown()).max(100).pipe(z.array(z.object({ name: identifier, description: z.string().max(2000) }))),
+  composition: z.array(z.unknown()).max(100).pipe(z.array(z.string().max(2000))),
   effect: z.string().min(1).max(2000),
 });
 export const catalogSchema = z.object({
   protocolVersion: z.literal(1),
   service: z.object({ id: identifier, name: z.string().min(1).max(200) }),
-  prompts: z.array(promptSchema).max(1000),
+  // Reject oversized lists before constructing per-item validation errors.
+  prompts: z.array(z.unknown()).max(1000).pipe(z.array(promptSchema)),
 }).superRefine((value, ctx) => {
   if (new Set(value.prompts.map(prompt => prompt.id)).size !== value.prompts.length) {
     ctx.addIssue({ code: "custom", message: "提示词 ID 重复" });
