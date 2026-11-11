@@ -22,6 +22,7 @@ export const promptSchema = z.object({
   name: z.string().min(1).max(200),
   description: z.string().max(4000),
   content: z.string().min(1).max(131072),
+  contentFormat: z.literal("json").optional(),
   defaultContent: z.string().min(1).max(131072),
   revision: z.string().min(1).max(128),
   customized: z.boolean(),
@@ -30,6 +31,12 @@ export const promptSchema = z.object({
   variables: boundedArray(z.object({ name: identifier, description: z.string().max(2000) }), 100),
   composition: boundedArray(z.string().max(2000), 100),
   effect: z.string().min(1).max(2000),
+}).superRefine((value, context) => {
+  if (value.contentFormat !== "json") return;
+  for (const field of ["content", "defaultContent"] as const) {
+    try { JSON.parse(value[field]); }
+    catch { context.addIssue({ code: "custom", message: "配置需要有效的 JSON", path: [field] }); }
+  }
 });
 export const catalogSchema = z.object({
   protocolVersion: z.literal(1),

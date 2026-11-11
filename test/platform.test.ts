@@ -342,3 +342,47 @@ test("reference store detects default upgrades while preserving overrides and ta
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("JSON configurations accept formatting changes, confirm values, and preserve default semantics", async () => {
+  let writes = 0;
+  let mismatch = false;
+  let value = { enabled: false, topics: ["AI"] };
+  const defaults = JSON.stringify(value);
+  const prompt = (): Prompt => ({
+    id: "collection-direction", name: "采集方向", description: "合成采集配置",
+    contentFormat: "json", content: JSON.stringify(value, null, writes % 2 ? 2 : 0), defaultContent: defaults,
+    revision: String(writes), customized: value.enabled, readOnly: false, maxLength: 16000,
+    variables: [], composition: [], effect: "下一轮采集读取配置",
+  });
+  const fetcher: typeof fetch = async (input, init) => {
+    const url = String(input);
+    if (url.endsWith("/v1/prompts")) return Response.json({ protocolVersion: 1, service: { id: "json-example", name: "配置业务" }, prompts: [prompt()] });
+    if (init?.method === "PUT") {
+      const update = JSON.parse(String(init.body));
+      if (update.expectedRevision !== String(writes)) return Response.json({}, { status: 409 });
+      value = update.content === null ? JSON.parse(defaults) : JSON.parse(update.content);
+      writes++;
+      if (mismatch) value = { ...value, topics: ["unexpected"] };
+    }
+    const result = prompt();
+    if (init?.method !== "PUT") result.content = JSON.stringify({ topics: value.topics, enabled: value.enabled });
+    return Response.json(result);
+  };
+  const f = await fixture(fetcher);
+  try {
+    await f.login(); const id = await f.add();
+    const path = `/api/channels/${id}/prompts/collection-direction`;
+    assert.equal((await f.request(path, "PUT", { content: "{invalid", expectedRevision: "0" })).status, 400);
+    assert.equal(writes, 0);
+    const saved = await f.request(path, "PUT", { content: '{ "topics": ["AI"], "enabled": true }', expectedRevision: "0" });
+    assert.equal(saved.status, 200);
+    assert.equal((await saved.json() as Prompt).contentFormat, "json");
+    const reset = await f.request(path, "PUT", { content: null, expectedRevision: "1" });
+    assert.equal(reset.status, 200);
+    assert.equal((await reset.json() as Prompt).customized, false);
+    assert.equal((await f.request(path, "PUT", { content: defaults, expectedRevision: "2" })).status, 200);
+    mismatch = true;
+    assert.equal((await f.request(path, "PUT", { content: '{"enabled":true,"topics":["AI"]}', expectedRevision: "3" })).status, 502);
+    assert.equal(catalogSchema.safeParse({ protocolVersion: 1, service: { id: "json-example", name: "配置" }, prompts: [{ ...prompt(), content: "broken" }] }).success, false);
+  } finally { await f.close(); }
+});

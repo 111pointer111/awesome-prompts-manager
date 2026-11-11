@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isDeepStrictEqual } from "node:util";
 import { catalogSchema, promptSchema, updateSchema } from "../shared/protocol.js";
 import type { Catalog, Prompt } from "../shared/protocol.js";
 import { decryptToken, encryptToken } from "./crypto.js";
@@ -10,6 +11,10 @@ const channelInput = z.object({
   baseUrl: z.string().url().max(2048),
   token: z.string().min(16).max(4096).refine(value => !/[\s\x00-\x1f\x7f]/u.test(value)),
 }).strict();
+
+function sameContent(format: Prompt["contentFormat"], left: string, right: string): boolean {
+  return format === "json" ? isDeepStrictEqual(JSON.parse(left), JSON.parse(right)) : left === right;
+}
 
 export function normalizeUrl(value: string): string {
   const url = new URL(value);
@@ -125,6 +130,10 @@ export class Channels {
       if (update.content !== null && (!update.content.trim() || update.content.includes("\0") || update.content.length > cached.maxLength)) {
         throw new AppError(400, "invalid_prompt", `提示词需要非空文本，长度最多 ${cached.maxLength} 个代码单元`);
       }
+      if (cached.contentFormat === "json" && update.content !== null) {
+        try { JSON.parse(update.content); }
+        catch { throw new AppError(400, "invalid_configuration", "配置需要有效的 JSON，请检查引号、逗号和字段值"); }
+      }
       const channel = this.store.channel(id);
       const token = decryptToken(channel.token, this.key);
       const path = "/v1/prompts/" + encodeURIComponent(promptId);
@@ -132,8 +141,9 @@ export class Channels {
       try {
         accepted = promptSchema.parse(await this.request(channel.base_url, token, path, update));
         const expected = update.content ?? accepted.defaultContent;
-        const changed = accepted.content !== cached.content || accepted.customized !== cached.customized;
-        if (accepted.id !== promptId || accepted.content !== expected || accepted.customized !== (update.content !== null)
+        const changed = !sameContent(cached.contentFormat, accepted.content, cached.content) || accepted.customized !== cached.customized;
+        const customizationMatches = cached.contentFormat === "json" && update.content !== null || accepted.customized === (update.content !== null);
+        if (accepted.id !== promptId || accepted.contentFormat !== cached.contentFormat || !sameContent(cached.contentFormat, accepted.content, expected) || !customizationMatches
           || (changed && accepted.revision === update.expectedRevision)) throw new Error("save receipt mismatch");
       } catch (error) {
         if (error instanceof AppError && error.status < 500) {
@@ -155,7 +165,8 @@ export class Channels {
       this.store.updatePrompt(id, accepted);
       try {
         const confirmed = promptSchema.parse(await this.request(channel.base_url, token, path));
-        if (confirmed.id !== promptId || confirmed.revision !== accepted.revision || confirmed.content !== accepted.content) {
+        if (confirmed.id !== promptId || confirmed.revision !== accepted.revision || confirmed.contentFormat !== accepted.contentFormat
+          || confirmed.customized !== accepted.customized || !sameContent(accepted.contentFormat, confirmed.content, accepted.content)) {
           throw new Error("readback changed");
         }
         this.store.updatePrompt(id, confirmed);

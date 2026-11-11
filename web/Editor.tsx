@@ -33,11 +33,13 @@ export function Editor({ prompt, channel, draft, onDraft, onContentSaved, onNote
   const changedRemotely = prompt.revision !== draft.revision;
   const noteChangedRemotely = prompt.noteRevision !== draft.noteRevision;
   const editable = !channel.error && prompt.active && !prompt.readOnly;
+  const configuration = prompt.contentFormat === "json";
+  const contentLabel = configuration ? "配置正文" : "提示词正文";
   const contentPath = `/api/channels/${encodeURIComponent(prompt.channelId)}/prompts/${encodeURIComponent(prompt.id)}`;
 
   async function saveContent(reset = false) {
     if (saving || !editable) return;
-    if (reset && !window.confirm("恢复为当前业务部署提供的默认提示词？当前正文输入会被替换。")) return;
+    if (reset && !window.confirm(configuration ? "恢复业务默认配置？当前配置输入会被替换，具体影响见卷面生效规则。" : "恢复为当前业务部署提供的默认提示词？当前正文输入会被替换。")) return;
     setSaving("content");
     onDraft({ contentError: "", notice: "" });
     const submitted = { content: draft.content, revision: draft.revision };
@@ -81,7 +83,7 @@ export function Editor({ prompt, channel, draft, onDraft, onContentSaved, onNote
   }
 
   return <section className="editor" aria-labelledby="editor-title">
-    {confirmed && <div ref={seal} className="confirmation-seal" role="status" aria-label="正文已保存并回读确认"><span>已核</span><small>回读确认</small></div>}
+    {confirmed && <div ref={seal} className="confirmation-seal" role="status" aria-label={`${configuration ? "配置" : "正文"}已保存并回读确认`}><span>已核</span><small>回读确认</small></div>}
     <header className="editor-heading">
       <div className="eyebrow">{channel.name}<span aria-hidden="true"> / </span>{prompt.customized ? "自定义内容" : "默认内容"}</div>
       <h2 id="editor-title">{prompt.name}</h2>
@@ -92,9 +94,9 @@ export function Editor({ prompt, channel, draft, onDraft, onContentSaved, onNote
       {channel.error && <p className="feedback warning" role="status">渠道离线，当前为最近一次同步的内容。{channel.error}</p>}
       {!prompt.active && <p className="feedback warning" role="status">业务目录已移除此提示词，保留上次内容与备注。</p>}
       {changedRemotely && <div className="feedback warning" role="status"><p>业务已有新版本，当前未保存的正文已保留。载入新版后再继续编辑。</p><details><summary>查看业务最新版（版本 {prompt.revision}）</summary><pre className="comparison-content">{prompt.content}</pre></details><button type="button" onClick={loadLatestContent} disabled={!!saving}>载入业务最新版</button></div>}
-      <div className="section-label"><label htmlFor="prompt-content">提示词正文</label>{contentDirty(draft) && <span className="unsaved">未保存</span>}</div>
+      <div className="section-label"><label htmlFor="prompt-content">{contentLabel}</label>{contentDirty(draft) && <span className="unsaved">未保存</span>}</div>
       <textarea id="prompt-content" className="content-input" value={draft.content} maxLength={prompt.maxLength} readOnly={!editable} disabled={!!saving} spellCheck={false} onChange={event => onDraft({ content: event.target.value, contentError: "", notice: "" })} />
-      <div className="editor-actions"><span className="field-help">{draft.content.length.toLocaleString()} / {prompt.maxLength.toLocaleString()} 字符</span><div><button type="button" onClick={() => void saveContent(true)} disabled={!editable || !!saving || changedRemotely}>恢复默认</button><button className="primary" type="button" onClick={() => void saveContent()} disabled={!editable || !!saving || changedRemotely || !contentDirty(draft) || !draft.content.trim()}>{saving === "content" ? "正在保存…" : "保存正文"}</button></div></div>
+      <div className="editor-actions"><span className="field-help">{draft.content.length.toLocaleString()} / {prompt.maxLength.toLocaleString()} 字符</span><div><button type="button" onClick={() => void saveContent(true)} disabled={!editable || !!saving || changedRemotely}>恢复默认</button><button className="primary" type="button" onClick={() => void saveContent()} disabled={!editable || !!saving || changedRemotely || !contentDirty(draft) || !draft.content.trim()}>{saving === "content" ? "正在保存…" : configuration ? "保存配置" : "保存正文"}</button></div></div>
       {draft.contentError && <p className="feedback error" role="alert">{draft.contentError}</p>}
       {draft.notice && <p className="feedback success" role="status">{draft.notice}</p>}
       <p className="effect"><span>生效规则</span>{prompt.effect}</p>
@@ -102,7 +104,7 @@ export function Editor({ prompt, channel, draft, onDraft, onContentSaved, onNote
         {prompt.variables.length ? <dl className="variables">{prompt.variables.map(variable => <div key={variable.name}><dt><code>{variable.name}</code></dt><dd>{variable.description}</dd></div>)}</dl> : <p className="muted">此模板未声明运行时变量。</p>}
         {prompt.composition.length > 0 && <><h3>请求组合</h3><ul className="composition">{prompt.composition.map((part, index) => <li key={`${index}-${part}`}>{part}</li>)}</ul></>}
       </details>
-      <details className="prompt-details"><summary>当前部署的默认正文</summary><pre className="default-content">{prompt.defaultContent}</pre></details>
+      <details className="prompt-details"><summary>{configuration ? "当前部署的默认配置" : "当前部署的默认正文"}</summary><pre className="default-content">{prompt.defaultContent}</pre></details>
       <section className="notes-section" aria-labelledby="note-label">
         <div className="section-label"><label id="note-label" htmlFor="prompt-note">备注</label>{noteDirty(draft) && <span className="unsaved">未保存</span>}</div>
         <p className="field-help">备注保存在管理平台，可参与搜索。</p>
