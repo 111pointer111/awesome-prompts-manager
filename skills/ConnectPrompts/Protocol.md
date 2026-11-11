@@ -33,7 +33,23 @@
 
 `content` 是当前原始模板，`defaultContent` 是当前部署代码提供的默认值，`revision` 是版本字符串，`customized` 表示使用自定义配置，`readOnly` 表示当前条目只读。`variables` 提供变量名称和说明，`composition` 描述实际组合顺序，`effect` 说明新任务生效单位。原始资料、变量实际值和密钥由原业务管理。
 
-目录最多 1000 项，响应体最多 8 MiB，单个模板上限为 131072 个 JavaScript UTF-16 代码单元，业务通过 `maxLength` 声明具体上限。其他语言计算长度时使用相同单位。超过范围时先扩展协议和资源验证。
+字符串长度使用 JavaScript UTF-16 代码单元，其他语言按相同单位校验。v1 的字段上限如下，业务通过 `maxLength` 声明实际模板上限。
+
+| 字段 | 范围 |
+| --- | --- |
+| `service.id`、`id`、`variables[].name` | 1～128，字符规则同上 |
+| `service.name`、`name` | 1～200 |
+| `description` | 0～4000 |
+| `content`、`defaultContent` | 1～131072 |
+| `revision`、`expectedRevision` | 字符串，1～128 |
+| `maxLength` | 整数，1～131072 |
+| `variables`、`composition` | 各 0～100 项 |
+| `variables[].description`、`composition[]` | 每项 0～2000 |
+| `effect` | 1～2000 |
+| `prompts` | 0～1000 项 |
+| 目录响应体 | 最多 8 MiB |
+
+超过范围时先扩展协议和资源验证。
 
 目录同步成功后，平台更新完整副本。失联保留最近成功副本，目录已移除项保留备注并标记失效。
 

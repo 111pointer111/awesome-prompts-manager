@@ -45,7 +45,7 @@ class PromptStore:
             "content": content if content is not None else DEFAULT, "defaultContent": DEFAULT,
             "revision": str(revision), "customized": content is not None, "readOnly": False, "maxLength": 16000,
             "variables": [{"name": "topics", "description": "本次任务的兴趣话题，由业务填入"}],
-            "composition": ["本条评分偏好", "业务固定的输出格式要求", "文章原文作为独立用户消息"],
+            "composition": ["本条评分偏好", "业务固定的输出格式要求"],
             "effect": "下一项文章评审开始时读取并固定到本项任务结束",
         }
 

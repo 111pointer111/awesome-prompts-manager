@@ -31,6 +31,22 @@
 
 每次成功同步是完整目录。失联保留最后成功副本，已从目录移除的条目保留备注并标记失效。一个目录最多 1000 项、响应体最多 8 MiB，单个模板最多 131072 个 JavaScript UTF-16 代码单元，具体限制由 `maxLength` 声明。需要更大目录时应先增加分页协议与资源测试。
 
+字段上限与 [共享校验定义](../shared/protocol.ts) 一致，字符串长度按 JavaScript UTF-16 代码单元计算。
+
+| 字段 | 约束 |
+| --- | --- |
+| `service.id`、提示词 `id`、`variables[].name` | 1～128 位，首位字母或数字，其余允许字母、数字、点、下划线、连字符 |
+| 业务显示 `name`、提示词显示 `name` | 1～200 |
+| `description` | 最多 4000 |
+| `content`、`defaultContent` | 1～131072，并遵守业务声明的 `maxLength` |
+| `revision`、`expectedRevision` | 1～128，由原业务解释的字符串 |
+| `maxLength` | 1～131072 的整数 |
+| `variables`、`composition` | 每项提示词各最多 100 个元素 |
+| 变量 `description`、组合说明每项 | 最多 2000 |
+| `effect` | 1～2000 |
+
+平台新增渠道的 Token 长度为 16～4096，不包含空白或控制字符。原业务可以提出更严格的凭据要求。
+
 ## 读取与修改
 
 `GET /v1/prompts/{id}` 返回同结构的单条提示词。
