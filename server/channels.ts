@@ -136,7 +136,19 @@ export class Channels {
         if (accepted.id !== promptId || accepted.content !== expected || accepted.customized !== (update.content !== null)
           || (changed && accepted.revision === update.expectedRevision)) throw new Error("save receipt mismatch");
       } catch (error) {
-        if (error instanceof AppError && error.status < 500) throw error;
+        if (error instanceof AppError && error.status < 500) {
+          if (error.status === 401) this.store.fail(id, error.message);
+          if (error.status === 409) {
+            try {
+              const latest = promptSchema.parse(await this.request(channel.base_url, token, path));
+              if (latest.id !== promptId) throw new Error("wrong prompt");
+              this.store.updatePrompt(id, latest);
+            } catch {
+              this.store.fail(id, "版本冲突后的业务回读失败，请同步后比较");
+            }
+          }
+          throw error;
+        }
         this.store.fail(id, "保存结果待确认，请同步业务后核对版本和内容");
         throw new AppError(502, "save_unconfirmed", "保存结果待确认，当前输入已保留，请同步后核对，避免重复提交");
       }

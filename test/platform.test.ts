@@ -249,3 +249,16 @@ test("oversized malformed catalogs produce bounded validation failures", () => {
     if (!nested.success) assert.equal(nested.error.issues.length, 2);
   } finally { f.store.close(); }
 });
+
+test("a remote version conflict immediately refreshes the comparison snapshot", async () => {
+  const f = await fixture();
+  try {
+    await f.login(); const id = await f.add();
+    f.example.store.save({ content: "业务其他入口已更新 {topics}", expectedRevision: "0" });
+    const result = await f.request(`/api/channels/${id}/prompts/article-review`, "PUT", { content: "当前页面的修改 {topics}", expectedRevision: "0" });
+    assert.equal(result.status, 409);
+    const state = await (await f.request("/api/state")).json() as PlatformState;
+    assert.equal(state.prompts[0]?.revision, "1");
+    assert.equal(state.prompts[0]?.content, "业务其他入口已更新 {topics}");
+  } finally { await f.close(); }
+});
