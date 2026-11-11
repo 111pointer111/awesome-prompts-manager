@@ -65,7 +65,9 @@ h1, h2, h3, p { margin: 0; }
 .prompt-name { display: flex; align-items: center; gap: 7px; font-size: 14px; font-weight: 600; color: #2e3a43; margin-bottom: 5px; }
 .prompt-description { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; color: #7c878c; font-size: 11px; line-height: 1.8; overflow-wrap: anywhere; }
 .prompt-note-preview { display: block; width: 100%; color: #8c9397; font-size: 10px; margin-top: 7px; text-overflow: ellipsis; white-space: nowrap; overflow: hidden; }
-.prompt-row-footer { display: flex; justify-content: space-between; width: 100%; margin-top: 12px; color: #9aa3a7; font-size: 10px; }
+.prompt-row-footer { display: flex; justify-content: space-between; gap: 10px; width: 100%; margin-top: 12px; color: #9aa3a7; font-size: 10px; }
+.prompt-row-footer > span:first-child { flex-shrink: 0; }
+.prompt-row-footer > span:last-child { min-width: 0; overflow-wrap: anywhere; text-align: right; }
 .draft-dot { background: #c38f3e; width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
 .source-warning { font-size: 11px; color: #977137; padding: 13px 20px; border-bottom: 1px solid var(--border); background: #fcf8f1; }
 .source-warning span { display: block; margin-top: 4px; font-size: 10px; color: #a39782; }
@@ -75,6 +77,7 @@ h1, h2, h3, p { margin: 0; }
 .editor-heading h2 { font-size: 22px; font-weight: 600; letter-spacing: -.4px; margin-bottom: 9px; overflow-wrap: anywhere; }
 .editor-description { color: #7c878c; font-size: 12px; line-height: 1.9; max-width: 700px; }
 .metadata-line { display: flex; flex-wrap: wrap; gap: 16px; font-size: 10px; color: #97a0a5; margin-top: 13px; }
+.metadata-line > span { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
 .editor-body { padding: 25px 33px 34px; }
 .section-label { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
 .section-label label { color: #4c5961; font-size: 12px; font-weight: 550; }

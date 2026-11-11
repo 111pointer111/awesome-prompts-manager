@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ManagedPrompt } from "../shared/protocol";
-import { contentDirty, matchesPrompt, newDraft, noteDirty, promptKey, reconcileDraft } from "./drafts";
+import { contentDirty, matchesPrompt, mergeContentSave, newDraft, noteDirty, promptKey, reconcileDraft } from "./drafts";
 
 const prompt: ManagedPrompt = {
   id: "review", channelId: "channel-a", name: "文章评分", description: "评估工程内容",
@@ -42,4 +42,18 @@ test("刷新保留未保存备注，干净正文跟随业务最新版", () => {
 
 test("不同渠道的同名提示词草稿互相独立", () => {
   assert.notEqual(promptKey(prompt), promptKey({ ...prompt, channelId: "channel-b" }));
+});
+
+test("保存提示完整保留 opaque 版本，后续草稿继续标明未保存", () => {
+  const revision = `1:${"a".repeat(64)}`;
+  assert.equal(revision.length, 66);
+  const submitted = { ...newDraft(prompt), content: "提交的正文" };
+  const saved = { content: "提交的正文", revision };
+  const clean = mergeContentSave(submitted, submitted, saved);
+  assert.equal(clean.notice, `已保存版本 ${revision}`);
+  assert.equal(clean.revision, revision);
+  const laterInput = mergeContentSave({ ...submitted, content: "后续正文" }, submitted, saved);
+  assert.equal(laterInput.notice, `已保存版本 ${revision}，后续输入仍未保存`);
+  assert.equal(laterInput.content, "后续正文");
+  assert.equal(laterInput.revision, revision);
 });

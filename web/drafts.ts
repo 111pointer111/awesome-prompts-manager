@@ -43,7 +43,7 @@ export function mergeContentSave(current: Draft, submitted: Pick<Draft, "content
     baseContent: saved.content,
     revision: saved.revision,
     contentError: "",
-    notice: hasLaterInput ? `已保存为第 ${saved.revision} 版，后续输入仍未保存` : `已保存为第 ${saved.revision} 版`,
+    notice: hasLaterInput ? `已保存版本 ${saved.revision}，后续输入仍未保存` : `已保存版本 ${saved.revision}`,
   };
 }
 
